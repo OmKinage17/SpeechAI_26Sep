@@ -25,6 +25,12 @@ export const SetupCheck: React.FC<SetupCheckProps> = ({
     }
   }, [stream]);
 
+  useEffect(() => {
+    if (!stream) {
+      onStartCamera();
+    }
+  }, [stream, onStartCamera]);
+
   const hasStream = stream !== null && stream.active;
 
   return (
@@ -125,8 +131,7 @@ export const SetupCheck: React.FC<SetupCheckProps> = ({
         <button
           className="vid-btn-primary"
           onClick={onProceed}
-          disabled={!hasStream}
-          style={{ marginTop: '24px', opacity: hasStream ? 1 : 0.5, cursor: hasStream ? 'pointer' : 'not-allowed' }}
+          style={{ marginTop: '24px' }}
         >
           <span>Continue to Recording</span>
           <ArrowRight size={16} />

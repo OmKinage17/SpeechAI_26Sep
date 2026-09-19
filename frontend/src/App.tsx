@@ -359,9 +359,15 @@ const getPresetsForExercise = (exerciseId: string, difficulty: 'beginner' | 'int
 
 function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'practice' | 'fluency' | 'exercises' | 'video'>(() => {
-    const params = new URLSearchParams(window.location.search);
-    const tab = params.get('tab');
-    if (tab === 'video' || tab === 'practice' || tab === 'fluency' || tab === 'exercises' || tab === 'dashboard') {
+    const searchParams = new URLSearchParams(window.location.search);
+    const path = window.location.pathname.toLowerCase();
+    const hash = window.location.hash.toLowerCase();
+    
+    if (searchParams.get('tab') === 'video' || path.includes('video') || hash.includes('video')) {
+      return 'video';
+    }
+    const tab = searchParams.get('tab');
+    if (tab === 'practice' || tab === 'fluency' || tab === 'exercises' || tab === 'dashboard') {
       return tab;
     }
     return 'dashboard';

@@ -169,7 +169,12 @@ export const VideoAnalysisModule: React.FC<VideoAnalysisModuleProps> = ({ curren
               micLevel={micLevel}
               error={mediaError}
               onStartCamera={startCamera}
-              onProceed={() => setStep('record')}
+              onProceed={() => {
+                if (!stream) {
+                  startCamera();
+                }
+                setStep('record');
+              }}
             />
           )}
 
