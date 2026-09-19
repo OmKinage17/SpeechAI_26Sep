@@ -9,6 +9,7 @@ import { FusionTimeline } from './components/FusionTimeline';
 import { EmotionBreakdown } from './components/EmotionBreakdown';
 import { FeedbackList } from './components/FeedbackList';
 import { VideoHistory } from './components/VideoHistory';
+import { SpeechDetailedMetrics } from './components/SpeechDetailedMetrics';
 import { submitVideoAnalysis, pollSessionStatus, fetchUserVideoReports, deleteVideoSession } from './videoApi';
 import type { VideoSessionDetail } from './types';
 import { Video, History, RotateCcw } from 'lucide-react';
@@ -212,6 +213,15 @@ export const VideoAnalysisModule: React.FC<VideoAnalysisModuleProps> = ({ curren
                 scores={currentSession.scores}
                 durationSec={currentSession.duration_sec}
               />
+
+              {/* 1.5 Detailed Speech Analytics */}
+              {currentSession.speech && (
+                <SpeechDetailedMetrics
+                  speech={currentSession.speech}
+                  durationSec={currentSession.duration_sec}
+                />
+              )}
+
 
               {/* 2. 5-Second Window Fusion Timeline */}
               <FusionTimeline timeline={currentSession.timeline} />

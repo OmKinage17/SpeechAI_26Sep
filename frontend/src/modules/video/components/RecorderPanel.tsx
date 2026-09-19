@@ -72,7 +72,9 @@ export const RecorderPanel: React.FC<RecorderPanelProps> = ({
 
   // Audio Question Reader (SpeechSynthesis) state for Interview mode
   const [isSpeakingQuestion, setIsSpeakingQuestion] = useState(false);
-  const [autoReadQuestion, setAutoReadQuestion] = useState(true);
+  const [autoReadQuestion, setAutoReadQuestion] = useState(false);
+  const [spokenCharIndex, setSpokenCharIndex] = useState(0);
+  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
   // Custom Topic Paragraph Generator state
   const [aiTopic, setAiTopic] = useState('Artificial Intelligence');
@@ -99,6 +101,7 @@ export const RecorderPanel: React.FC<RecorderPanelProps> = ({
       window.speechSynthesis.cancel();
     }
     setIsSpeakingQuestion(false);
+    setSpokenCharIndex(0);
   }, []);
 
   // Speak Interview question aloud
@@ -107,13 +110,28 @@ export const RecorderPanel: React.FC<RecorderPanelProps> = ({
     window.speechSynthesis.cancel();
 
     const utterance = new SpeechSynthesisUtterance(textToSpeak);
+    utteranceRef.current = utterance; // Prevent garbage collection
     utterance.rate = 0.93; // Measured, natural interview tone
     utterance.pitch = 1.0;
     utterance.lang = 'en-US';
 
-    utterance.onstart = () => setIsSpeakingQuestion(true);
-    utterance.onend = () => setIsSpeakingQuestion(false);
-    utterance.onerror = () => setIsSpeakingQuestion(false);
+    utterance.onstart = () => {
+      setIsSpeakingQuestion(true);
+      setSpokenCharIndex(0);
+    };
+    utterance.onboundary = (e) => {
+      if (e.name === 'word') {
+        setSpokenCharIndex(e.charIndex);
+      }
+    };
+    utterance.onend = () => {
+      setIsSpeakingQuestion(false);
+      setSpokenCharIndex(0);
+    };
+    utterance.onerror = () => {
+      setIsSpeakingQuestion(false);
+      setSpokenCharIndex(0);
+    };
 
     window.speechSynthesis.speak(utterance);
   }, []);
@@ -206,6 +224,112 @@ export const RecorderPanel: React.FC<RecorderPanelProps> = ({
 
   const wordCount = activePrompt.trim().split(/\s+/).filter(Boolean).length;
   const estimatedSeconds = Math.round((wordCount / 130) * 60);
+
+  // --- NEW: User Speech Tracking for Teleprompter Effect ---
+  const [liveTranscript, setLiveTranscript] = useState('');
+  const recognitionRef = useRef<any>(null);
+
+  useEffect(() => {
+    if (isRecording) {
+      setLiveTranscript('');
+      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        recognitionRef.current = new SpeechRecognition();
+        recognitionRef.current.continuous = true;
+        recognitionRef.current.interimResults = true;
+        recognitionRef.current.lang = 'en-US';
+
+        recognitionRef.current.onresult = (event: any) => {
+          let finalTrans = '';
+          let interimTrans = '';
+          for (let i = 0; i < event.results.length; ++i) {
+            if (event.results[i].isFinal) {
+              finalTrans += event.results[i][0].transcript + ' ';
+            } else {
+              interimTrans += event.results[i][0].transcript;
+            }
+          }
+          setLiveTranscript((finalTrans + interimTrans).trim());
+        };
+
+        try {
+          recognitionRef.current.start();
+        } catch (e) {
+          console.error("SpeechRecognition start error:", e);
+        }
+      }
+    } else {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch (e) {}
+      }
+      setLiveTranscript('');
+    }
+    
+    return () => {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch (e) {}
+      }
+    };
+  }, [isRecording]);
+
+  const getLiveWordColorClass = (index: number, currentTarget: string): string => {
+    if (!liveTranscript || !isRecording) {
+      return isRecording && index === 0 ? 'practice-word current' : 'practice-word default';
+    }
+
+    const targetWords = currentTarget.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "").toLowerCase().split(/\s+/).filter(Boolean);
+    const liveWords = liveTranscript.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "").toLowerCase().split(/\s+/).filter(Boolean);
+
+    if (liveWords.length === 0) {
+      return index === 0 ? 'practice-word current' : 'practice-word default';
+    }
+
+    let liveIdx = 0;
+    let wordStatus: 'correct' | 'incorrect' | 'default' | 'current' = 'default';
+
+    for (let tIdx = 0; tIdx <= index; tIdx++) {
+      if (tIdx >= targetWords.length) break;
+      if (liveIdx >= liveWords.length) {
+        if (tIdx === index) wordStatus = 'current';
+        break;
+      }
+
+      const tWord = targetWords[tIdx];
+      const lWord = liveWords[liveIdx];
+
+      if (tWord === lWord) {
+        if (tIdx === index) wordStatus = 'correct';
+        liveIdx++;
+      } else {
+        const nextTWord = tIdx + 1 < targetWords.length ? targetWords[tIdx + 1] : '';
+        if (nextTWord === lWord) {
+          if (tIdx === index) wordStatus = 'incorrect';
+        } else {
+          if (tIdx === index) wordStatus = 'incorrect';
+          liveIdx++;
+        }
+      }
+    }
+
+    return `practice-word ${wordStatus}`;
+  };
+
+  const renderHighlightedText = (text: string) => {
+    const displayWords = text.split(/\s+/);
+    return (
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+        {displayWords.map((word, index) => (
+          <span key={index} className={getLiveWordColorClass(index, text)}>
+            {word}
+          </span>
+        ))}
+      </div>
+    );
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -359,9 +483,6 @@ export const RecorderPanel: React.FC<RecorderPanelProps> = ({
                       AI Practice Paragraph Generator
                     </span>
                   </div>
-                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                    Module 1 & 2 Shared Generator
-                  </span>
                 </div>
 
                 {/* Quick Topic Chips */}
@@ -477,7 +598,38 @@ export const RecorderPanel: React.FC<RecorderPanelProps> = ({
                     </span>
                   </div>
 
-                  <div style={{ display: 'flex', gap: '8px' }}>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    {/* Read Aloud feature for Custom Topic */}
+                    {isSpeakingQuestion ? (
+                      <div className="vid-speaker-pill" style={{ marginRight: '8px', padding: '2px 8px', background: 'rgba(239, 68, 68, 0.15)' }}>
+                        <div className="vid-speaker-wave">
+                          <div className="vid-wave-bar" />
+                          <div className="vid-wave-bar" />
+                          <div className="vid-wave-bar" />
+                          <div className="vid-wave-bar" />
+                        </div>
+                        <span style={{ color: '#f87171' }}>Speaking...</span>
+                      </div>
+                    ) : null}
+
+                    {isSpeakingQuestion ? (
+                      <button
+                        className="vid-btn-secondary"
+                        onClick={stopSpeaking}
+                        style={{ padding: '4px 10px', fontSize: '11.5px', color: '#f87171', borderColor: 'rgba(239, 68, 68, 0.4)' }}
+                      >
+                        <VolumeX size={12} /> Stop Audio
+                      </button>
+                    ) : (
+                      <button
+                        className="vid-btn-secondary"
+                        onClick={() => speakQuestion(activePrompt)}
+                        style={{ padding: '4px 10px', fontSize: '11.5px', color: 'var(--primary)', borderColor: 'rgba(99, 102, 241, 0.4)' }}
+                      >
+                        <Volume2 size={12} /> Read Aloud
+                      </button>
+                    )}
+
                     {isEditingParagraph ? (
                       <button
                         className="vid-btn-secondary"
@@ -523,8 +675,8 @@ export const RecorderPanel: React.FC<RecorderPanelProps> = ({
                     onChange={(e) => setEditedParagraph(e.target.value)}
                   />
                 ) : (
-                  <p style={{ margin: 0, fontSize: '15px', color: '#f8fafc', fontWeight: 500, letterSpacing: '0.2px' }}>
-                    "{generatedParagraph}"
+                  <p style={{ margin: 0, fontSize: '15px', color: '#f8fafc', fontWeight: 500, letterSpacing: '0.2px', lineHeight: 1.6 }}>
+                    {renderHighlightedText(generatedParagraph)}
                   </p>
                 )}
               </div>
@@ -550,13 +702,7 @@ export const RecorderPanel: React.FC<RecorderPanelProps> = ({
             /* Live Recording View */
             <>
               <video
-                ref={(el) => {
-                  liveVideoRef.current = el;
-                  if (el && stream && !recordedUrl) {
-                    el.srcObject = stream;
-                    el.play().catch(() => {});
-                  }
-                }}
+                ref={liveVideoRef}
                 autoPlay
                 playsInline
                 muted
