@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Mic, Square, Play, CheckCircle, AlertCircle, Sparkles, BookOpen, BarChart3, HelpCircle, Activity, Flame, History, AlertTriangle, LogIn, LogOut, UserPlus, X, Search, RefreshCw, LayoutDashboard, Compass, Volume2 } from 'lucide-react';
+import { Mic, Square, Play, CheckCircle, AlertCircle, Sparkles, BookOpen, BarChart3, HelpCircle, Activity, Flame, History, AlertTriangle, LogIn, LogOut, UserPlus, X, Search, RefreshCw, LayoutDashboard, Compass, Volume2, Video as VideoIcon } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LabelList } from 'recharts';
 import './App.css';
+import { VideoAnalysisModule } from './modules/video/VideoAnalysisModule';
 
 // Type definitions
 interface MismatchedWord {
@@ -357,7 +358,7 @@ const getPresetsForExercise = (exerciseId: string, difficulty: 'beginner' | 'int
 };
 
 function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'practice' | 'fluency' | 'exercises'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'practice' | 'fluency' | 'exercises' | 'video'>('dashboard');
   const [status, setStatus] = useState<'idle' | 'recording' | 'processing' | 'success' | 'error'>('idle');
   const [statusMessage, setStatusMessage] = useState('Ready to record');
   
@@ -1153,6 +1154,10 @@ function App() {
           <button className={`nav-tab-btn ${activeTab === 'exercises' ? 'active' : ''}`} onClick={() => { setActiveTab('exercises'); setStatus('idle'); setStatusMessage('Ready to record'); }}>
             <Compass size={16} />
             <span>Exercises</span>
+          </button>
+          <button className={`nav-tab-btn ${activeTab === 'video' ? 'active' : ''}`} onClick={() => { setActiveTab('video'); setStatus('idle'); setStatusMessage('Ready to record'); }}>
+            <VideoIcon size={16} />
+            <span><span className="nav-module-prefix">Module 3: </span>Video</span>
           </button>
         </div>
         
@@ -3195,6 +3200,13 @@ function App() {
                 )}
               </>
             )}
+          </div>
+        )}
+
+        {/* 5. MODULE 3: VIDEO & COMMUNICATION ANALYSIS */}
+        {activeTab === 'video' && (
+          <div className="view-fade">
+            <VideoAnalysisModule currentUser={currentUser} />
           </div>
         )}
       </main>

@@ -9,6 +9,8 @@ backend/temp_audio/
 backend_video/venv_video/
 backend_video/__pycache__/
 backend_video/temp_media/
+backend/video_module/__pycache__/
+backend/video_module/temp_media/
 *.pyc
 temp_audio/
 temp_media/

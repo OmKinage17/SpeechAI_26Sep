@@ -36,6 +36,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Module 3 Integration
+from video_module.router import router as video_router, init_router as init_video_router
+app.include_router(video_router)
+
 # Temporary directory for file processing
 TEMP_DIR = "temp_audio"
 os.makedirs(TEMP_DIR, exist_ok=True)
@@ -390,6 +394,7 @@ def startup_db_client():
     try:
         seed_exercises()
         seed_default_user()
+        init_video_router(db, get_whisper_model)
     except Exception as e:
         logger.error(f"Error during database seeding: {e}")
 
