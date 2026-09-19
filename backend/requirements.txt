@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+pymongo
+motor
+python-multipart
+librosa
+soundfile
+numpy
+jiwer
+openai-whisper
+static-ffmpeg
+httpx
+edge-tts
+

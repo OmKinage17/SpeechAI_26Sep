@@ -1,0 +1,28 @@
+# Node modules
+frontend/node_modules/
+frontend/dist/
+
+# Python virtual environment
+backend/venv/
+backend/__pycache__/
+backend/temp_audio/
+backend_video/venv_video/
+backend_video/__pycache__/
+backend_video/temp_media/
+*.pyc
+temp_audio/
+temp_media/
+
+# Environment variables
+.env
+.env.local
+.env.*
+*.env
+
+# Local IDE/Environment settings
+.vscode/
+.idea/
+.gemini/
+.agents/
+*.log
+
