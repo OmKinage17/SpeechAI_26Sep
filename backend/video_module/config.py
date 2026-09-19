@@ -41,7 +41,7 @@ MIN_BRIGHTNESS = 40.0
 MAX_BRIGHTNESS = 220.0
 MIN_FACE_AREA_RATIO = 0.03
 
-# IEEE Paper Eq. (1) Weights
+# Multimodal Scoring Dimension Weights
 DEFAULT_WEIGHTS: Dict[str, float] = {
     "F": 0.30,  # Fluency
     "P": 0.15,  # Speech clarity

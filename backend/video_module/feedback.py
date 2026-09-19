@@ -6,7 +6,7 @@ def generate_multimodal_feedback(
     scores: Dict[str, Any]
 ) -> List[Dict[str, str]]:
     """
-    IEEE Paper Section IV-F: Rule-based clinical and communication feedback generator.
+    Rule-based communication and delivery feedback generator.
     Categorized into 'speech', 'non_verbal', and 'recording_quality'.
     """
     feedback: List[Dict[str, str]] = []

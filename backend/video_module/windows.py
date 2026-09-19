@@ -10,7 +10,7 @@ def generate_fusion_timeline(
     frame_emotions: List[Dict[str, Any]]
 ) -> List[Dict[str, Any]]:
     """
-    IEEE Paper Section IV-E & V-G: Fuses speech and vision metrics across 5-second windows.
+    Fuses speech and vision metrics across 5-second windows.
     """
     timeline: List[Dict[str, Any]] = []
     if duration_sec <= 0:

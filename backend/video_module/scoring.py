@@ -12,7 +12,7 @@ from video_module.config import (
 
 def compute_speech_scores(speech: Dict[str, Any], task_type: str = "free_talk") -> Dict[str, float]:
     """
-    IEEE Paper Eq. (2)-(4), (14)-(16): Fluency (F) and Clarity (P) scores on 0-100 scale.
+    Computes Fluency (F) and Clarity (P) scores on a 0-100 scale.
     """
     word_count = max(1, speech.get("word_count", 0))
     filler_count = speech.get("filler_count", 0)
@@ -61,7 +61,7 @@ def compute_speech_scores(speech: Dict[str, Any], task_type: str = "free_talk") 
 
 def compute_visual_scores(visual: Dict[str, Any]) -> Dict[str, Optional[float]]:
     """
-    IEEE Paper Section IV-D & VII: Non-verbal (N) and Emotion (E) scores.
+    Computes Non-verbal (N) and Emotion (E) scores based on visual metrics.
     """
     face_presence = visual.get("face_presence_ratio", 0.0)
     if face_presence < 0.50:
@@ -108,7 +108,7 @@ def compute_overall_scores(
     v_score: Optional[float] = None
 ) -> Dict[str, Any]:
     """
-    IEEE Paper Eq. (1): Computes explainable weighted overall score with dynamic renormalization.
+    Computes explainable weighted overall score with dynamic renormalization.
     """
     scores_map = {
         "F": f_score,
@@ -131,7 +131,7 @@ def compute_overall_scores(
             "unavailable": unavailable_keys
         }
 
-    # Dynamic renormalization (paper Section V-G)
+    # Dynamic renormalization across available modalities
     renormalized_weights = {
         k: round(DEFAULT_WEIGHTS[k] / total_orig_weight, 4)
         for k in available_keys

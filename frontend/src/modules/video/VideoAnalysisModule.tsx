@@ -119,7 +119,7 @@ export const VideoAnalysisModule: React.FC<VideoAnalysisModuleProps> = ({ curren
             <span style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 800, color: 'var(--secondary)', background: 'var(--secondary-light)', padding: '3px 10px', borderRadius: 'var(--radius-full)' }}>
               Module 3
             </span>
-            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>IEEE Multimodal Pipeline</span>
+            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Multimodal AI Pipeline</span>
           </div>
           <h1 className="vid-hero-title">Video & Communication Analysis</h1>
           <p className="vid-hero-subtitle">

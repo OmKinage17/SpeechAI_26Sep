@@ -162,7 +162,7 @@ def analyze_frame(image_bgr: np.ndarray, timestamp: float) -> Dict[str, Any]:
 
 def aggregate_visual_session(frame_results: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
-    IEEE Paper Section IV-D: Aggregates visual behavior metrics over the complete recording.
+    Aggregates visual behavior metrics over the complete recording.
     """
     total_frames = len(frame_results)
     if total_frames == 0:
