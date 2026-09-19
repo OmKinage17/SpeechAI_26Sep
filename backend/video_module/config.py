@@ -23,6 +23,8 @@ LONG_PAUSE_SEC = 1.5
 IDEAL_WPM_BANDS: Dict[str, Tuple[float, float]] = {
     "free_talk": (120.0, 150.0),
     "interview": (110.0, 140.0),
+    "custom_topic": (120.0, 150.0),
+    "paragraph": (120.0, 150.0),
     "presentation": (125.0, 155.0)
 }
 REF_FILLER_RATE = 4.0      # 4%

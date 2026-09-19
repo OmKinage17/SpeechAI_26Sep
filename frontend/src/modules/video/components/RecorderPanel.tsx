@@ -1,5 +1,19 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Square, RotateCcw, Send, Sparkles, Clock, MessageSquare, Video } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { 
+  Square, 
+  RotateCcw, 
+  Send, 
+  Sparkles, 
+  Clock, 
+  MessageSquare, 
+  Video, 
+  Volume2, 
+  VolumeX, 
+  FileText, 
+  Edit3, 
+  Check, 
+  RefreshCw 
+} from 'lucide-react';
 
 interface RecorderPanelProps {
   stream: MediaStream | null;
@@ -13,23 +27,33 @@ interface RecorderPanelProps {
   onSubmit: (taskType: string, promptText: string) => void;
 }
 
-const DEFAULT_PROMPTS: Record<string, string[]> = {
+const DEFAULT_PROMPTS = {
   free_talk: [
     "Describe your favorite hobby or a passion project you enjoy working on, focusing on calm pacing and steady eye contact.",
-    "Share an inspiring story or experience that taught you a valuable life lesson.",
-    "Discuss how modern technology has impacted the way we connect with friends and family."
+    "Share an inspiring story or personal experience that taught you a valuable life lesson.",
+    "Discuss how modern technology has impacted the way we connect with friends, colleagues, and family.",
+    "Describe a place you love visiting and explain what makes it so special to you."
   ],
   interview: [
     "Tell me about yourself and walk me through a professional challenge you successfully overcame.",
     "How do you handle high-pressure deadlines while maintaining clear communication with your team?",
-    "Where do you see yourself in three years, and what speech habits are you actively developing?"
-  ],
-  presentation: [
-    "Introduce a revolutionary product idea in 60 seconds, maintaining confident posture and natural vocal inflection.",
-    "Present a summary of the SpeechAI Multimodal platform and explain why non-verbal signals matter in speech therapy.",
-    "Explain an interesting scientific concept to a general audience using clear articulation and structured pauses."
+    "Where do you see yourself in three years, and what speech habits are you actively developing?",
+    "Describe a situation where you had a disagreement with a team member and how you resolved it professionally.",
+    "What is your greatest strength, and how do you leverage it when communicating complex ideas?",
+    "Why do you believe confident body language and steady eye contact are critical for effective leadership?",
+    "Can you share an experience where you had to adapt quickly to unexpected project changes?",
+    "How do you prioritize competing tasks when multiple stakeholders consider their requests urgent?"
   ]
 };
+
+const QUICK_TOPICS = [
+  "Artificial Intelligence",
+  "Space Exploration",
+  "Leadership & Teamwork",
+  "Climate Action",
+  "Healthy Daily Habits",
+  "Future of Remote Work"
+];
 
 export const RecorderPanel: React.FC<RecorderPanelProps> = ({
   stream,
@@ -42,22 +66,86 @@ export const RecorderPanel: React.FC<RecorderPanelProps> = ({
   onRetake,
   onSubmit
 }) => {
-  const [taskType, setTaskType] = useState<'free_talk' | 'interview' | 'presentation'>('free_talk');
+  const [taskType, setTaskType] = useState<'free_talk' | 'interview' | 'custom_topic'>('free_talk');
   const [promptIndex, setPromptIndex] = useState(0);
   const [countdown, setCountdown] = useState<number | null>(null);
+
+  // Audio Question Reader (SpeechSynthesis) state for Interview mode
+  const [isSpeakingQuestion, setIsSpeakingQuestion] = useState(false);
+  const [autoReadQuestion, setAutoReadQuestion] = useState(true);
+
+  // Custom Topic Paragraph Generator state
+  const [aiTopic, setAiTopic] = useState('Artificial Intelligence');
+  const [aiLength, setAiLength] = useState<'sentence' | 'paragraph' | 'long_paragraph'>('paragraph');
+  const [aiFocusExercise, setAiFocusExercise] = useState('none');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generatedParagraph, setGeneratedParagraph] = useState(
+    "Effective communication is a powerful skill that combines steady vocal pacing, clear articulation, and natural body language. When you speak with calm confidence and maintain steady eye contact, your listeners are far more engaged and receptive to your core ideas."
+  );
+  const [isEditingParagraph, setIsEditingParagraph] = useState(false);
+  const [editedParagraph, setEditedParagraph] = useState(generatedParagraph);
 
   const liveVideoRef = useRef<HTMLVideoElement | null>(null);
   const reviewVideoRef = useRef<HTMLVideoElement | null>(null);
 
-  // Attach live camera feed
+  // Active prompt for standard modes
+  const activePrompt = taskType === 'custom_topic'
+    ? (isEditingParagraph ? editedParagraph : generatedParagraph)
+    : DEFAULT_PROMPTS[taskType][promptIndex % DEFAULT_PROMPTS[taskType].length];
+
+  // Stop TTS speech
+  const stopSpeaking = useCallback(() => {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+    setIsSpeakingQuestion(false);
+  }, []);
+
+  // Speak Interview question aloud
+  const speakQuestion = useCallback((textToSpeak: string) => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(textToSpeak);
+    utterance.rate = 0.93; // Measured, natural interview tone
+    utterance.pitch = 1.0;
+    utterance.lang = 'en-US';
+
+    utterance.onstart = () => setIsSpeakingQuestion(true);
+    utterance.onend = () => setIsSpeakingQuestion(false);
+    utterance.onerror = () => setIsSpeakingQuestion(false);
+
+    window.speechSynthesis.speak(utterance);
+  }, []);
+
+  // Cleanup audio on unmount or tab switch
+  useEffect(() => {
+    return () => {
+      stopSpeaking();
+    };
+  }, [stopSpeaking]);
+
+  // Auto-read question when interview question changes
+  useEffect(() => {
+    if (taskType === 'interview' && autoReadQuestion && !recordedUrl && !isRecording) {
+      const q = DEFAULT_PROMPTS.interview[promptIndex % DEFAULT_PROMPTS.interview.length];
+      speakQuestion(q);
+    } else {
+      stopSpeaking();
+    }
+  }, [taskType, promptIndex, autoReadQuestion, recordedUrl, isRecording, speakQuestion, stopSpeaking]);
+
+  // Keep live camera attached and playing
   useEffect(() => {
     if (liveVideoRef.current && stream && !recordedUrl) {
       liveVideoRef.current.srcObject = stream;
+      liveVideoRef.current.play().catch(() => {});
     }
   }, [stream, recordedUrl]);
 
   // Handle countdown before recording starts
   const triggerStartWithCountdown = () => {
+    stopSpeaking();
     setCountdown(3);
   };
 
@@ -68,11 +156,47 @@ export const RecorderPanel: React.FC<RecorderPanelProps> = ({
       return () => clearTimeout(timer);
     } else if (countdown === 0) {
       setCountdown(null);
+      stopSpeaking();
       onStartRecord();
     }
-  }, [countdown, onStartRecord]);
+  }, [countdown, onStartRecord, stopSpeaking]);
 
-  const activePrompt = DEFAULT_PROMPTS[taskType][promptIndex % DEFAULT_PROMPTS[taskType].length];
+  // Topic Paragraph Generation Handler (same backend API as Module 1 & Module 2)
+  const handleGenerateParagraph = async (overrideTopic?: string) => {
+    const topicParam = overrideTopic || aiTopic || 'General Communication';
+    setIsGenerating(true);
+    try {
+      const url = `http://127.0.0.1:8000/practice/generate?topic=${encodeURIComponent(topicParam)}&length=${aiLength}&exercise_id=${aiFocusExercise}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        setGeneratedParagraph(data.text);
+        setEditedParagraph(data.text);
+        setIsEditingParagraph(false);
+      } else {
+        throw new Error('Failed to generate paragraph');
+      }
+    } catch (e) {
+      console.error(e);
+      const fallbackText = "Speaking in front of an audience can be intimidating at first, but with steady pacing and deliberate breaths, anyone can deliver a powerful message. Focus on articulation and maintain a conversational speed of around one hundred and thirty words per minute.";
+      setGeneratedParagraph(fallbackText);
+      setEditedParagraph(fallbackText);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  // Retake click handler
+  const handleRetakeClick = async () => {
+    setCountdown(null);
+    stopSpeaking();
+    if (reviewVideoRef.current) {
+      reviewVideoRef.current.pause();
+      reviewVideoRef.current.removeAttribute('src');
+      reviewVideoRef.current.load();
+    }
+    await onRetake();
+  };
 
   const formatTime = (secs: number) => {
     const m = Math.floor(secs / 60);
@@ -80,22 +204,27 @@ export const RecorderPanel: React.FC<RecorderPanelProps> = ({
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
+  const wordCount = activePrompt.trim().split(/\s+/).filter(Boolean).length;
+  const estimatedSeconds = Math.round((wordCount / 130) * 60);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       {/* Top: Task Mode Selector */}
       {!recordedUrl && (
         <div className="vid-task-selector">
+          {/* 1. Free Talk */}
           <div
             className={`vid-task-option ${taskType === 'free_talk' ? 'active' : ''}`}
-            onClick={() => { setTaskType('free_talk'); setPromptIndex(0); }}
+            onClick={() => { setTaskType('free_talk'); setPromptIndex(0); stopSpeaking(); }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
               <MessageSquare size={16} style={{ color: 'var(--primary)' }} />
               <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>Free Talk</span>
             </div>
-            <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Target: 120-150 WPM (Conversational)</p>
+            <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Conversational prompts (120-150 WPM)</p>
           </div>
 
+          {/* 2. Interactive Interview Answer */}
           <div
             className={`vid-task-option ${taskType === 'interview' ? 'active' : ''}`}
             onClick={() => { setTaskType('interview'); setPromptIndex(0); }}
@@ -104,41 +233,304 @@ export const RecorderPanel: React.FC<RecorderPanelProps> = ({
               <Clock size={16} style={{ color: 'var(--secondary)' }} />
               <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>Interview Answer</span>
             </div>
-            <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Target: 110-140 WPM (Deliberate)</p>
+            <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>AI Interviewer speaks questions (110-140 WPM)</p>
           </div>
 
+          {/* 3. Custom Topic Paragraph Generation (Replacing Presentation) */}
           <div
-            className={`vid-task-option ${taskType === 'presentation' ? 'active' : ''}`}
-            onClick={() => { setTaskType('presentation'); setPromptIndex(0); }}
+            className={`vid-task-option ${taskType === 'custom_topic' ? 'active' : ''}`}
+            onClick={() => { setTaskType('custom_topic'); stopSpeaking(); }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
               <Sparkles size={16} style={{ color: 'var(--accent)' }} />
-              <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>Presentation</span>
+              <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>Custom Topic AI</span>
             </div>
-            <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Target: 125-155 WPM (Engaging)</p>
+            <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Generate reading passages on any topic</p>
           </div>
         </div>
       )}
 
-      {/* Suggested Prompt Card */}
+      {/* Task Prompt Area */}
       {!recordedUrl && (
-        <div className="vid-prompt-box" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <span style={{ fontSize: '12px', textTransform: 'uppercase', letterSpacing: '1px', color: 'var(--secondary)', fontWeight: 700 }}>
-              Practice Topic & Speaking Prompt
-            </span>
-            <p style={{ marginTop: '4px', fontSize: '15px', color: 'var(--text-primary)', fontWeight: 500 }}>
-              "{activePrompt}"
-            </p>
-          </div>
-          <button
-            className="vid-btn-secondary"
-            onClick={() => setPromptIndex(prev => prev + 1)}
-            style={{ padding: '6px 12px', fontSize: '12px', flexShrink: 0 }}
-          >
-            New Prompt
-          </button>
-        </div>
+        <>
+          {/* CASE 1: Free Talk Prompt */}
+          {taskType === 'free_talk' && (
+            <div className="vid-prompt-box" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <span style={{ fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '1px', color: 'var(--secondary)', fontWeight: 700 }}>
+                  Practice Topic & Conversational Prompt
+                </span>
+                <p style={{ marginTop: '4px', fontSize: '15px', color: 'var(--text-primary)', fontWeight: 500 }}>
+                  "{activePrompt}"
+                </p>
+              </div>
+              <button
+                className="vid-btn-secondary"
+                onClick={() => setPromptIndex(prev => prev + 1)}
+                style={{ padding: '6px 14px', fontSize: '12px', flexShrink: 0 }}
+              >
+                Next Prompt
+              </button>
+            </div>
+          )}
+
+          {/* CASE 2: Interactive AI Interviewer Box */}
+          {taskType === 'interview' && (
+            <div className="vid-interview-card">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span style={{ fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '1px', color: 'var(--primary)', fontWeight: 700 }}>
+                    AI Mock Interviewer • Question {(promptIndex % DEFAULT_PROMPTS.interview.length) + 1} of {DEFAULT_PROMPTS.interview.length}
+                  </span>
+                  {isSpeakingQuestion && (
+                    <div className="vid-speaker-pill">
+                      <div className="vid-speaker-wave">
+                        <div className="vid-wave-bar" />
+                        <div className="vid-wave-bar" />
+                        <div className="vid-wave-bar" />
+                        <div className="vid-wave-bar" />
+                      </div>
+                      <span>Speaking Question...</span>
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={autoReadQuestion}
+                      onChange={(e) => setAutoReadQuestion(e.target.checked)}
+                      style={{ accentColor: 'var(--primary)' }}
+                    />
+                    Auto-read questions
+                  </label>
+                </div>
+              </div>
+
+              <div style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text-primary)', lineHeight: 1.5 }}>
+                "{activePrompt}"
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '2px', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '10px' }}>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  {isSpeakingQuestion ? (
+                    <button
+                      className="vid-btn-secondary"
+                      onClick={stopSpeaking}
+                      style={{ padding: '6px 14px', fontSize: '12px', borderColor: 'rgba(239, 68, 68, 0.4)', color: '#f87171' }}
+                    >
+                      <VolumeX size={14} /> Stop Audio
+                    </button>
+                  ) : (
+                    <button
+                      className="vid-btn-secondary"
+                      onClick={() => speakQuestion(activePrompt)}
+                      style={{ padding: '6px 14px', fontSize: '12px', borderColor: 'rgba(99, 102, 241, 0.4)', color: 'var(--primary)' }}
+                    >
+                      <Volume2 size={14} /> Read Aloud
+                    </button>
+                  )}
+                </div>
+
+                <button
+                  className="vid-btn-secondary"
+                  onClick={() => {
+                    stopSpeaking();
+                    setPromptIndex(prev => prev + 1);
+                  }}
+                  style={{ padding: '6px 14px', fontSize: '12px' }}
+                >
+                  Next Question
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* CASE 3: Custom Topic & Paragraph Generator (similar to Module 1 & 2) */}
+          {taskType === 'custom_topic' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {/* Generator Configuration Controls */}
+              <div className="vid-topic-generator">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Sparkles size={16} style={{ color: 'var(--accent)' }} />
+                    <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                      AI Practice Paragraph Generator
+                    </span>
+                  </div>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                    Module 1 & 2 Shared Generator
+                  </span>
+                </div>
+
+                {/* Quick Topic Chips */}
+                <div className="vid-quick-chips">
+                  {QUICK_TOPICS.map(topic => (
+                    <button
+                      key={topic}
+                      type="button"
+                      className={`vid-chip-btn ${aiTopic === topic ? 'active' : ''}`}
+                      onClick={() => {
+                        setAiTopic(topic);
+                        handleGenerateParagraph(topic);
+                      }}
+                    >
+                      {topic}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Inputs Grid */}
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: '10px', alignItems: 'flex-end' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '4px' }}>
+                      Topic Keyword
+                    </label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      style={{ padding: '7px 12px', fontSize: '13px', width: '100%' }}
+                      value={aiTopic}
+                      onChange={(e) => setAiTopic(e.target.value)}
+                      placeholder="e.g. Artificial Intelligence, Climate, Leadership..."
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '4px' }}>
+                      Length
+                    </label>
+                    <select
+                      style={{
+                        width: '100%',
+                        padding: '7px 10px',
+                        backgroundColor: 'var(--bg-primary)',
+                        color: 'var(--text-primary)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: 'var(--radius-sm)',
+                        fontSize: '13px'
+                      }}
+                      value={aiLength}
+                      onChange={(e) => setAiLength(e.target.value as 'sentence' | 'paragraph' | 'long_paragraph')}
+                    >
+                      <option value="sentence">Sentence</option>
+                      <option value="paragraph">Paragraph</option>
+                      <option value="long_paragraph">Long Paragraph</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '4px' }}>
+                      Focus Drill
+                    </label>
+                    <select
+                      style={{
+                        width: '100%',
+                        padding: '7px 10px',
+                        backgroundColor: 'var(--bg-primary)',
+                        color: 'var(--text-primary)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: 'var(--radius-sm)',
+                        fontSize: '13px'
+                      }}
+                      value={aiFocusExercise}
+                      onChange={(e) => setAiFocusExercise(e.target.value)}
+                    >
+                      <option value="none">Standard Pacing</option>
+                      <option value="silent_pause_drill">Silent Pause Focus</option>
+                      <option value="slow_rate_reading">Slow Rate Reading</option>
+                      <option value="articulation_drill">Articulation Drill</option>
+                    </select>
+                  </div>
+
+                  <button
+                    className="vid-btn-primary"
+                    type="button"
+                    onClick={() => handleGenerateParagraph()}
+                    disabled={isGenerating}
+                    style={{ padding: '8px 18px', fontSize: '13px', whiteSpace: 'nowrap' }}
+                  >
+                    {isGenerating ? (
+                      <>
+                        <RefreshCw size={14} className="spin" /> Generating...
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles size={14} /> Generate
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Teleprompter Reading Card */}
+              <div className="vid-teleprompter-card">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <FileText size={15} style={{ color: 'var(--accent)' }} />
+                    <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.5px' }}>
+                      Reading Script Teleprompter
+                    </span>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.05)', padding: '2px 8px', borderRadius: 'var(--radius-full)' }}>
+                      {wordCount} words • ~{estimatedSeconds}s reading
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    {isEditingParagraph ? (
+                      <button
+                        className="vid-btn-secondary"
+                        onClick={() => {
+                          setGeneratedParagraph(editedParagraph);
+                          setIsEditingParagraph(false);
+                        }}
+                        style={{ padding: '4px 10px', fontSize: '11.5px', color: 'var(--success)', borderColor: 'rgba(16,185,129,0.4)' }}
+                      >
+                        <Check size={12} /> Save Script
+                      </button>
+                    ) : (
+                      <button
+                        className="vid-btn-secondary"
+                        onClick={() => {
+                          setEditedParagraph(generatedParagraph);
+                          setIsEditingParagraph(true);
+                        }}
+                        style={{ padding: '4px 10px', fontSize: '11.5px' }}
+                      >
+                        <Edit3 size={12} /> Edit Script
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {isEditingParagraph ? (
+                  <textarea
+                    rows={4}
+                    style={{
+                      width: '100%',
+                      padding: '10px 14px',
+                      background: 'var(--bg-primary)',
+                      color: 'var(--text-primary)',
+                      border: '1px solid var(--border-color)',
+                      borderRadius: 'var(--radius-sm)',
+                      fontSize: '14.5px',
+                      lineHeight: 1.6,
+                      fontFamily: 'inherit',
+                      resize: 'vertical'
+                    }}
+                    value={editedParagraph}
+                    onChange={(e) => setEditedParagraph(e.target.value)}
+                  />
+                ) : (
+                  <p style={{ margin: 0, fontSize: '15px', color: '#f8fafc', fontWeight: 500, letterSpacing: '0.2px' }}>
+                    "{generatedParagraph}"
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       {/* Main Video Stage Area */}
@@ -157,8 +549,20 @@ export const RecorderPanel: React.FC<RecorderPanelProps> = ({
           ) : (
             /* Live Recording View */
             <>
-              <video ref={liveVideoRef} autoPlay playsInline muted className="vid-camera-video" />
-              
+              <video
+                ref={(el) => {
+                  liveVideoRef.current = el;
+                  if (el && stream && !recordedUrl) {
+                    el.srcObject = stream;
+                    el.play().catch(() => {});
+                  }
+                }}
+                autoPlay
+                playsInline
+                muted
+                className="vid-camera-video"
+              />
+
               {/* 3-2-1 Countdown Overlay */}
               {countdown !== null && (
                 <div style={{
@@ -171,7 +575,8 @@ export const RecorderPanel: React.FC<RecorderPanelProps> = ({
                   fontSize: '80px',
                   fontWeight: 900,
                   color: 'var(--primary)',
-                  animation: 'pulse-glow 1s infinite'
+                  animation: 'pulse-glow 1s infinite',
+                  zIndex: 20
                 }}>
                   {countdown}
                 </div>
@@ -192,7 +597,8 @@ export const RecorderPanel: React.FC<RecorderPanelProps> = ({
                   color: '#fff',
                   fontWeight: 700,
                   fontSize: '13px',
-                  boxShadow: '0 0 14px rgba(239, 68, 68, 0.6)'
+                  boxShadow: '0 0 14px rgba(239, 68, 68, 0.6)',
+                  zIndex: 10
                 }}>
                   <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#fff', animation: 'pulse-border 1s infinite' }} />
                   <span>REC {formatTime(recordingTime)}</span>
@@ -212,7 +618,8 @@ export const RecorderPanel: React.FC<RecorderPanelProps> = ({
                   backdropFilter: 'blur(8px)',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '12px'
+                  gap: '12px',
+                  zIndex: 10
                 }}>
                   <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 600 }}>MIC</span>
                   <div className="vid-meter-bar-bg" style={{ flex: 1, height: '6px' }}>
@@ -228,7 +635,7 @@ export const RecorderPanel: React.FC<RecorderPanelProps> = ({
         <div style={{ display: 'flex', justifyContent: 'center', gap: '16px', marginTop: '20px' }}>
           {recordedUrl ? (
             <>
-              <button className="vid-btn-secondary" onClick={onRetake}>
+              <button className="vid-btn-secondary" onClick={handleRetakeClick}>
                 <RotateCcw size={16} /> Retake Video
               </button>
               <button className="vid-btn-primary" onClick={() => onSubmit(taskType, activePrompt)}>

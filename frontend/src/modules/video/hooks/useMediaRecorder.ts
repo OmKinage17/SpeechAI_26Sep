@@ -18,6 +18,7 @@ export function useMediaRecorder(options: UseMediaRecorderOptions = {}) {
   const [error, setError] = useState<string | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -27,13 +28,15 @@ export function useMediaRecorder(options: UseMediaRecorderOptions = {}) {
   // Initialize camera and microphone stream
   const startCamera = useCallback(async () => {
     try {
-      if (stream) {
-        stream.getTracks().forEach(t => t.stop());
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => t.stop());
+        streamRef.current = null;
       }
       const mediaStream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
         audio: true
       });
+      streamRef.current = mediaStream;
       setStream(mediaStream);
       setError(null);
 
@@ -74,21 +77,24 @@ export function useMediaRecorder(options: UseMediaRecorderOptions = {}) {
       setError(msg);
       return null;
     }
-  }, [stream]);
+  }, []);
 
   const stopCamera = useCallback(() => {
     if (animFrameRef.current) {
       cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = null;
     }
     if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
       audioContextRef.current.close().catch(() => {});
+      audioContextRef.current = null;
     }
-    if (stream) {
-      stream.getTracks().forEach(t => t.stop());
-      setStream(null);
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
     }
+    setStream(null);
     setMicLevel(0);
-  }, [stream]);
+  }, []);
 
   // Clean up on component unmount
   useEffect(() => {
@@ -175,15 +181,24 @@ export function useMediaRecorder(options: UseMediaRecorderOptions = {}) {
     }
   }, []);
 
-  const retake = useCallback(() => {
+  const retake = useCallback(async () => {
     if (recordedUrl) {
-      URL.revokeObjectURL(recordedUrl);
+      try {
+        URL.revokeObjectURL(recordedUrl);
+      } catch {}
     }
     setRecordedBlob(null);
     setRecordedUrl(null);
     setRecordingTime(0);
     setError(null);
-  }, [recordedUrl]);
+    chunksRef.current = [];
+
+    // Verify stream is active; if stopped or ended, restart camera
+    const isStreamActive = streamRef.current && streamRef.current.active && streamRef.current.getVideoTracks().some(t => t.readyState === 'live');
+    if (!isStreamActive) {
+      await startCamera();
+    }
+  }, [recordedUrl, startCamera]);
 
   return {
     stream,
