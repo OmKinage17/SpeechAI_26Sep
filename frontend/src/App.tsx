@@ -358,7 +358,14 @@ const getPresetsForExercise = (exerciseId: string, difficulty: 'beginner' | 'int
 };
 
 function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'practice' | 'fluency' | 'exercises' | 'video'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'practice' | 'fluency' | 'exercises' | 'video'>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tab = params.get('tab');
+    if (tab === 'video' || tab === 'practice' || tab === 'fluency' || tab === 'exercises' || tab === 'dashboard') {
+      return tab;
+    }
+    return 'dashboard';
+  });
   const [status, setStatus] = useState<'idle' | 'recording' | 'processing' | 'success' | 'error'>('idle');
   const [statusMessage, setStatusMessage] = useState('Ready to record');
   
