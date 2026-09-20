@@ -19,7 +19,8 @@ import jiwer
 from audio_utils import convert_to_wav
 import httpx
 from fastapi.responses import StreamingResponse
-import asyncio
+import wave
+import numpy as np
 
 # Logging Setup
 logging.basicConfig(level=logging.INFO)
@@ -66,6 +67,9 @@ def get_whisper_model():
         logger.info("Whisper model loaded successfully.")
     return whisper_model
 
+# Initialize Module 3 Router with database and whisper loader
+init_video_router(db, get_whisper_model)
+
 # ==========================================
 # GLOBAL CONFIGURATION CONSTANTS
 # ==========================================
@@ -83,6 +87,7 @@ PAUSE_THRESHOLD_SEC = 1.5
 IDEAL_WPM_MIN = 120.0
 IDEAL_WPM_MAX = 150.0
 
+WHISPER_FILLER_PROMPT = "Um, uh, umm, uhh, er, ah, hmm, like, you know, actually, basically, so, well, i mean."
 SECRET_KEY = "speechai_cryptographic_secret_key_salt_token"
 # ==========================================
 
@@ -178,29 +183,150 @@ def serialize_datetime(dt: datetime) -> str:
         return dt.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z')
     return dt.isoformat().replace('+00:00', 'Z')
 
-def detect_fillers(transcript: str) -> tuple[int, List[str]]:
+def detect_acoustic_filled_pauses(wav_path: Optional[str], words_list: Optional[list]) -> List[Dict[str, Any]]:
+    """
+    Analyzes inter-word intervals in the 16kHz WAV audio.
+    If an interval (0.35s to 2.5s) contains sustained vocal energy,
+    it is detected as a filled pause (vocal hesitation 'uh/um').
+    """
+    if not wav_path or not os.path.exists(wav_path) or not words_list or len(words_list) < 2:
+        return []
+
+    try:
+        with wave.open(wav_path, 'rb') as wf:
+            n_channels = wf.getnchannels()
+            sampwidth = wf.getsampwidth()
+            framerate = wf.getframerate()
+            n_frames = wf.getnframes()
+            audio_bytes = wf.readframes(n_frames)
+
+        if sampwidth == 2:
+            audio_data = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32)
+        elif sampwidth == 1:
+            audio_data = (np.frombuffer(audio_bytes, dtype=np.uint8).astype(np.float32) - 128) * 256
+        else:
+            return []
+
+        if n_channels > 1:
+            audio_data = audio_data[::n_channels]
+
+        total_sec = len(audio_data) / framerate
+        if total_sec <= 0:
+            return []
+
+        # Estimate noise floor (RMS of quietest 15% of 50ms frames)
+        frame_len = int(framerate * 0.05)
+        if len(audio_data) < frame_len:
+            return []
+
+        frames_rms = []
+        for i in range(0, len(audio_data) - frame_len, frame_len):
+            chunk = audio_data[i:i+frame_len]
+            rms = np.sqrt(np.mean(chunk**2))
+            frames_rms.append(rms)
+
+        frames_rms.sort()
+        idx_15 = max(1, int(len(frames_rms) * 0.15))
+        noise_floor = np.median(frames_rms[:idx_15]) if frames_rms else 50.0
+        noise_floor = max(30.0, float(noise_floor))
+
+        vocal_threshold = max(250.0, noise_floor * 2.8)
+
+        filled_pauses = []
+        for i in range(len(words_list) - 1):
+            curr_end = words_list[i].get("end", 0.0)
+            next_start = words_list[i+1].get("start", 0.0)
+            gap = next_start - curr_end
+
+            if 0.35 <= gap <= 2.5:
+                start_sample = int(curr_end * framerate)
+                end_sample = int(next_start * framerate)
+                pad = int(0.05 * framerate)
+                s_sample = start_sample + pad
+                e_sample = end_sample - pad
+
+                if e_sample > s_sample:
+                    gap_audio = audio_data[s_sample:e_sample]
+                    gap_rms = float(np.sqrt(np.mean(gap_audio**2)))
+                    zero_crossings = float(np.sum(np.diff(gap_audio > 0) != 0) / len(gap_audio)) if len(gap_audio) > 0 else 1.0
+
+                    if gap_rms > vocal_threshold and zero_crossings < 0.30:
+                        filled_pauses.append({
+                            "type": "vocal_hesitation",
+                            "start": round(float(curr_end), 2),
+                            "end": round(float(next_start), 2),
+                            "duration": round(float(gap), 2)
+                        })
+        return filled_pauses
+    except Exception as e:
+        logger.error(f"Error in acoustic filled pause detection: {e}")
+        return []
+
+def detect_fillers(
+    transcript: str, 
+    wav_path: Optional[str] = None, 
+    words_list: Optional[list] = None
+) -> tuple[int, List[str]]:
     text_lower = transcript.lower()
     filler_count = 0
     fillers_found = []
 
-    phrase_fillers = ["you know"]
+    # 1. Multi-word phrase fillers
+    phrase_fillers = [
+        "you know", "i mean", "sort of", "kind of", 
+        "you see", "as in"
+    ]
     remaining_text = text_lower
     for phrase in phrase_fillers:
-        pattern = rf'\b{phrase}\b'
+        pattern = rf'\b{re.escape(phrase)}\b'
         matches = re.findall(pattern, text_lower)
         if matches:
             filler_count += len(matches)
             fillers_found.append(phrase)
             remaining_text = re.sub(pattern, ' ', remaining_text)
 
-    single_word_fillers = ["um", "uh", "like", "actually", "basically", "so"]
-    cleaned_remaining = re.sub(r'[.,\/#!$%\^&\*;:{}=\-_`~()?]', ' ', remaining_text)
+    # 2. Single-word fillers and hesitations
+    cleaned_remaining = re.sub(r'[.,\/#!$%\^&\*;:{}=\-_`~()?"]', ' ', remaining_text)
     words = cleaned_remaining.split()
+
+    single_word_fillers = {
+        "like", "actually", "basically", "literally", "honestly", "seriously", "so", "well"
+    }
+
     for w in words:
         if w in single_word_fillers:
             filler_count += 1
             if w not in fillers_found:
                 fillers_found.append(w)
+        # Match phonetic vocal hesitations: um, umm, ummm, uh, uhh, uhhh, er, err, erm, ah, ahh, hmm
+        elif re.match(r'^u+m+h*$', w):
+            filler_count += 1
+            if "um" not in fillers_found:
+                fillers_found.append("um")
+        elif re.match(r'^u+h+m*$', w):
+            filler_count += 1
+            if "uh" not in fillers_found:
+                fillers_found.append("uh")
+        elif re.match(r'^e+r+m*$', w):
+            filler_count += 1
+            if "er/erm" not in fillers_found:
+                fillers_found.append("er/erm")
+        elif re.match(r'^a+h+$', w):
+            filler_count += 1
+            if "ah" not in fillers_found:
+                fillers_found.append("ah")
+        elif re.match(r'^h+m+$', w):
+            filler_count += 1
+            if "hmm" not in fillers_found:
+                fillers_found.append("hmm")
+
+    # 3. Acoustic filled-pause detection (inter-word gap analysis)
+    if wav_path and words_list:
+        acoustic_fillers = detect_acoustic_filled_pauses(wav_path, words_list)
+        if acoustic_fillers:
+            filler_count += len(acoustic_fillers)
+            if "vocal hesitation (uh/um)" not in fillers_found:
+                fillers_found.append("vocal hesitation (uh/um)")
 
     return filler_count, fillers_found
 
@@ -698,7 +824,13 @@ async def submit_practice(
             raise HTTPException(status_code=500, detail="Audio conversion failed")
 
         model = get_whisper_model()
-        result = model.transcribe(temp_wav_path, word_timestamps=True)
+        result = model.transcribe(
+            temp_wav_path,
+            initial_prompt=WHISPER_FILLER_PROMPT,
+            condition_on_previous_text=False,
+            word_timestamps=True,
+            language="en"
+        )
         spoken_text = result.get("text", "").strip()
 
         target_clean = clean_text(target_sentence)
@@ -785,7 +917,13 @@ async def analyze_speech(
             raise HTTPException(status_code=500, detail="Audio conversion failed")
 
         model = get_whisper_model()
-        result = model.transcribe(temp_wav_path, word_timestamps=True)
+        result = model.transcribe(
+            temp_wav_path,
+            initial_prompt=WHISPER_FILLER_PROMPT,
+            condition_on_previous_text=False,
+            word_timestamps=True,
+            language="en"
+        )
         transcript = result.get("text", "").strip()
         segments = result.get("segments", [])
 
@@ -824,8 +962,12 @@ async def analyze_speech(
         duration_min = duration_sec / 60.0
         wpm = round(total_word_count / duration_min, 1) if duration_min > 0 else 0.0
 
-        # 4. Feature Extraction: Filler Words
-        filler_count, filler_words_found = detect_fillers(transcript)
+        # 4. Feature Extraction: Filler Words (Lexical + Acoustic Filled Pauses)
+        filler_count, filler_words_found = detect_fillers(
+            transcript=transcript,
+            wav_path=temp_wav_path,
+            words_list=words_list
+        )
 
         # 5. Feature Extraction: Stammering
         stammer_events = detect_stammering(transcript)

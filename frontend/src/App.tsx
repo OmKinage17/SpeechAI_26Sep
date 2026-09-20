@@ -357,6 +357,41 @@ const getPresetsForExercise = (exerciseId: string, difficulty: 'beginner' | 'int
   ];
 };
 
+const renderHighlightedTranscript = (transcript?: string, fillerWords: string[] = []) => {
+  if (!transcript) return null;
+  const fillerSet = new Set(fillerWords.map(w => w.toLowerCase()));
+  const words = transcript.split(/\s+/);
+
+  return words.map((w, idx) => {
+    const cleanWord = w.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?"]/g, '');
+    const isFiller = fillerSet.has(cleanWord) ||
+      /^(u+m+h*|u+h+m*|e+r+m*|a+h+|h+m+)$/.test(cleanWord) ||
+      ['like', 'actually', 'basically', 'so', 'well', 'literally', 'honestly'].includes(cleanWord);
+
+    if (isFiller) {
+      return (
+        <span
+          key={idx}
+          style={{
+            backgroundColor: 'rgba(245, 158, 11, 0.22)',
+            color: '#f59e0b',
+            padding: '2px 6px',
+            borderRadius: '4px',
+            fontWeight: 700,
+            border: '1px solid rgba(245, 158, 11, 0.4)',
+            margin: '0 2px',
+            display: 'inline-block'
+          }}
+          title="Detected filler word"
+        >
+          {w}
+        </span>
+      );
+    }
+    return <span key={idx}> {w}</span>;
+  });
+};
+
 function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'practice' | 'fluency' | 'exercises' | 'video'>(() => {
     const searchParams = new URLSearchParams(window.location.search);
@@ -2331,6 +2366,24 @@ function App() {
                       </li>
                     </ul>
 
+                    {analysisResult.transcript && (
+                      <div style={{ marginTop: '16px', padding: '12px', backgroundColor: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                          <h5 style={{ fontSize: '13px', fontWeight: 'bold', color: 'var(--text-primary)', margin: 0 }}>
+                            🎙️ Spoken Transcript & Tagged Fillers:
+                          </h5>
+                          {analysisResult.filler_count > 0 && (
+                            <span style={{ fontSize: '11px', color: '#f59e0b', backgroundColor: 'rgba(245, 158, 11, 0.12)', padding: '2px 8px', borderRadius: '4px', fontWeight: 600 }}>
+                              {analysisResult.filler_count} filler {analysisResult.filler_count === 1 ? 'word' : 'words'} detected
+                            </span>
+                          )}
+                        </div>
+                        <p style={{ fontSize: '13px', lineHeight: '1.8', color: 'var(--text-primary)', margin: 0 }}>
+                          {renderHighlightedTranscript(analysisResult.transcript, analysisResult.filler_words_found)}
+                        </p>
+                      </div>
+                    )}
+
                     {analysisResult.pause_details && analysisResult.pause_details.length > 0 && (
                       <div style={{ marginTop: '16px', padding: '12px', backgroundColor: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
                         <h5 style={{ fontSize: '13px', fontWeight: 'bold', color: 'var(--text-primary)', marginBottom: '8px' }}>⏱️ Detected Pause Locations:</h5>
@@ -3084,6 +3137,24 @@ function App() {
                             <span>Speech rate: <strong>{analysisResult.wpm} WPM</strong> (Ideal: 120-150)</span>
                           </li>
                         </ul>
+
+                        {analysisResult.transcript && (
+                          <div style={{ marginTop: '16px', padding: '12px', backgroundColor: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                              <h5 style={{ fontSize: '13px', fontWeight: 'bold', color: 'var(--text-primary)', margin: 0 }}>
+                                🎙️ Spoken Transcript & Tagged Fillers:
+                              </h5>
+                              {analysisResult.filler_count > 0 && (
+                                <span style={{ fontSize: '11px', color: '#f59e0b', backgroundColor: 'rgba(245, 158, 11, 0.12)', padding: '2px 8px', borderRadius: '4px', fontWeight: 600 }}>
+                                  {analysisResult.filler_count} filler {analysisResult.filler_count === 1 ? 'word' : 'words'} detected
+                                </span>
+                              )}
+                            </div>
+                            <p style={{ fontSize: '13px', lineHeight: '1.8', color: 'var(--text-primary)', margin: 0 }}>
+                              {renderHighlightedTranscript(analysisResult.transcript, analysisResult.filler_words_found)}
+                            </p>
+                          </div>
+                        )}
 
                         {analysisResult.pause_details && analysisResult.pause_details.length > 0 && (
                           <div style={{ marginTop: '16px', padding: '12px', backgroundColor: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}>

@@ -8,11 +8,19 @@ if sys.stdout.encoding != 'utf-8':
     except AttributeError:
         pass
 
+import os
+
+backend_dir = os.path.dirname(os.path.abspath(__file__))
+tests_dir = os.path.join(backend_dir, "tests")
+
 def run_script(name):
     print("=" * 60)
     print(f"RUNNING TEST SUITE: {name}")
     print("=" * 60)
-    res = subprocess.run([sys.executable, name], capture_output=True, text=True, encoding='utf-8')
+    test_path = os.path.join(tests_dir, name)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = backend_dir
+    res = subprocess.run([sys.executable, test_path], capture_output=True, text=True, encoding='utf-8', cwd=backend_dir, env=env)
     print(res.stdout)
     if res.stderr:
         print("Error details:")
@@ -26,7 +34,8 @@ def main():
         "test_auth_flow.py",
         "test_grok_generation.py",
         "test_pronunciation_alignment.py",
-        "test_speech_pathology_analysis.py"
+        "test_speech_pathology_analysis.py",
+        "test_feedback_evaluation.py"
     ]
     
     failed = False

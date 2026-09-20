@@ -237,8 +237,9 @@ export const VideoAnalysisModule: React.FC<VideoAnalysisModuleProps> = ({ curren
                   <SpeechDetailedMetrics
                     speech={currentSession.speech}
                     durationSec={currentSession.duration_sec}
+                    taskType={currentSession.task_type}
                   />
-                  {currentSession.prompt_text && (
+                  {currentSession.task_type === 'custom_topic' && currentSession.prompt_text && (
                     <PronunciationHighlight
                       targetText={currentSession.prompt_text}
                       spokenText={currentSession.speech.transcript}

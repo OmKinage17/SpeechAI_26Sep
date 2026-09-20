@@ -1,5 +1,8 @@
+import os
 import re
-from typing import Dict, Any, List, Tuple
+import wave
+import numpy as np
+from typing import Dict, Any, List, Tuple, Optional
 from video_module.config import LONG_PAUSE_SEC
 
 def clean_text(text: str) -> str:
@@ -8,29 +11,146 @@ def clean_text(text: str) -> str:
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
-def detect_fillers(transcript: str) -> Tuple[int, List[str]]:
+def detect_acoustic_filled_pauses(wav_path: Optional[str], words_list: Optional[list]) -> List[Dict[str, Any]]:
+    """
+    Analyzes inter-word intervals in the 16kHz WAV audio.
+    If an interval (0.35s to 2.5s) contains sustained vocal energy,
+    it is detected as a filled pause (vocal hesitation 'uh/um').
+    """
+    if not wav_path or not os.path.exists(wav_path) or not words_list or len(words_list) < 2:
+        return []
+
+    try:
+        with wave.open(wav_path, 'rb') as wf:
+            n_channels = wf.getnchannels()
+            sampwidth = wf.getsampwidth()
+            framerate = wf.getframerate()
+            n_frames = wf.getnframes()
+            audio_bytes = wf.readframes(n_frames)
+
+        if sampwidth == 2:
+            audio_data = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32)
+        elif sampwidth == 1:
+            audio_data = (np.frombuffer(audio_bytes, dtype=np.uint8).astype(np.float32) - 128) * 256
+        else:
+            return []
+
+        if n_channels > 1:
+            audio_data = audio_data[::n_channels]
+
+        total_sec = len(audio_data) / framerate
+        if total_sec <= 0:
+            return []
+
+        frame_len = int(framerate * 0.05)
+        if len(audio_data) < frame_len:
+            return []
+
+        frames_rms = []
+        for i in range(0, len(audio_data) - frame_len, frame_len):
+            chunk = audio_data[i:i+frame_len]
+            rms = np.sqrt(np.mean(chunk**2))
+            frames_rms.append(rms)
+
+        frames_rms.sort()
+        idx_15 = max(1, int(len(frames_rms) * 0.15))
+        noise_floor = np.median(frames_rms[:idx_15]) if frames_rms else 50.0
+        noise_floor = max(30.0, float(noise_floor))
+
+        vocal_threshold = max(250.0, noise_floor * 2.8)
+
+        filled_pauses = []
+        for i in range(len(words_list) - 1):
+            curr_end = words_list[i].get("end", 0.0)
+            next_start = words_list[i+1].get("start", 0.0)
+            gap = next_start - curr_end
+
+            if 0.35 <= gap <= 2.5:
+                start_sample = int(curr_end * framerate)
+                end_sample = int(next_start * framerate)
+                pad = int(0.05 * framerate)
+                s_sample = start_sample + pad
+                e_sample = end_sample - pad
+
+                if e_sample > s_sample:
+                    gap_audio = audio_data[s_sample:e_sample]
+                    gap_rms = float(np.sqrt(np.mean(gap_audio**2)))
+                    zero_crossings = float(np.sum(np.diff(gap_audio > 0) != 0) / len(gap_audio)) if len(gap_audio) > 0 else 1.0
+
+                    if gap_rms > vocal_threshold and zero_crossings < 0.30:
+                        filled_pauses.append({
+                            "type": "vocal_hesitation",
+                            "start": round(float(curr_end), 2),
+                            "end": round(float(next_start), 2),
+                            "duration": round(float(gap), 2)
+                        })
+        return filled_pauses
+    except Exception:
+        return []
+
+def detect_fillers(
+    transcript: str, 
+    wav_path: Optional[str] = None, 
+    words_list: Optional[list] = None
+) -> Tuple[int, List[str]]:
     text_lower = transcript.lower()
     filler_count = 0
     fillers_found = []
 
-    phrase_fillers = ["you know"]
+    phrase_fillers = [
+        "you know", "i mean", "sort of", "kind of", 
+        "you see", "as in"
+    ]
     remaining_text = text_lower
     for phrase in phrase_fillers:
-        pattern = rf'\b{phrase}\b'
+        pattern = rf'\b{re.escape(phrase)}\b'
         matches = re.findall(pattern, text_lower)
         if matches:
             filler_count += len(matches)
             fillers_found.append(phrase)
             remaining_text = re.sub(pattern, ' ', remaining_text)
 
-    single_word_fillers = ["um", "uh", "like", "actually", "basically", "so"]
-    cleaned_remaining = re.sub(r'[.,\/#!$%\^&\*;:{}=\-_`~()?]', ' ', remaining_text)
+    cleaned_remaining = re.sub(r'[.,\/#!$%\^&\*;:{}=\-_`~()?"]', ' ', remaining_text)
     words = cleaned_remaining.split()
+
+    single_word_fillers = {
+        "like", "actually", "basically", "literally", "honestly", "seriously", "so", "well"
+    }
+
     for w in words:
         if w in single_word_fillers:
             filler_count += 1
             if w not in fillers_found:
                 fillers_found.append(w)
+        # Catch variations of um and uh, er, ah, hmm
+        elif re.match(r'^u+m+h*$', w):
+            filler_count += 1
+            if "um" not in fillers_found:
+                fillers_found.append("um")
+        elif re.match(r'^u+h+m*$', w):
+            filler_count += 1
+            if "uh" not in fillers_found:
+                fillers_found.append("uh")
+        elif re.match(r'^e+r+m*$', w):
+            filler_count += 1
+            if "er/erm" not in fillers_found:
+                fillers_found.append("er/erm")
+        elif re.match(r'^a+h+$', w):
+            filler_count += 1
+            if "ah" not in fillers_found:
+                fillers_found.append("ah")
+        elif re.match(r'^h+m+$', w):
+            filler_count += 1
+            if "hmm" not in fillers_found:
+                fillers_found.append("hmm")
+
+    # Acoustic filled-pause detection (inter-word gap analysis)
+    if wav_path and words_list:
+        acoustic_fillers = detect_acoustic_filled_pauses(wav_path, words_list)
+        if acoustic_fillers:
+            filler_count += len(acoustic_fillers)
+            if "vocal hesitation (uh/um)" not in fillers_found:
+                fillers_found.append("vocal hesitation (uh/um)")
 
     return filler_count, fillers_found
 
@@ -50,7 +170,11 @@ def detect_repetitions(transcript: str) -> int:
 
     return rep_events
 
-def extract_speech_features(whisper_result: Dict[str, Any], total_duration_sec: float) -> Dict[str, Any]:
+def extract_speech_features(
+    whisper_result: Dict[str, Any], 
+    total_duration_sec: float,
+    wav_path: Optional[str] = None
+) -> Dict[str, Any]:
     """
     Extracts speech metrics from Whisper output: WPM, fillers, pauses, repetitions, clarity.
     """
@@ -80,7 +204,7 @@ def extract_speech_features(whisper_result: Dict[str, Any], total_duration_sec: 
     wpm = round(word_count / duration_min, 1) if duration_min > 0 else 0.0
 
     # Fillers & Repetitions
-    filler_count, filler_types = detect_fillers(transcript)
+    filler_count, filler_types = detect_fillers(transcript, wav_path=wav_path, words_list=words_list)
     repetition_count = detect_repetitions(transcript)
 
     # Pause detection

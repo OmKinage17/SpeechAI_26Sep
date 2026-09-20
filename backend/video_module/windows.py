@@ -1,3 +1,4 @@
+import re
 import numpy as np
 from typing import List, Dict, Any
 from video_module.config import FUSION_WINDOW_SEC
@@ -32,8 +33,23 @@ def generate_fusion_timeline(
         w_wpm = round((w_word_count / (w_duration / 60.0)), 1) if w_duration > 0 else 0.0
 
         # Fillers in window
-        filler_words = {"um", "uh", "like", "actually", "basically", "so", "you know"}
-        w_fillers = sum(1 for w in w_words if w.get("word", "").strip().lower() in filler_words)
+        filler_words = {
+            "like", "actually", "basically", "literally", "honestly", "seriously", "so", "well",
+            "you know", "i mean", "sort of", "kind of", "you see", "as in"
+        }
+        w_fillers = 0
+        for w in w_words:
+            w_text = w.get("word", "").strip().lower()
+            w_text = re.sub(r'[.,\/#!$%\^&\*;:{}=\-_`~()?"]', '', w_text)
+            if (
+                w_text in filler_words 
+                or re.match(r'^u+m+h*$', w_text) 
+                or re.match(r'^u+h+m*$', w_text) 
+                or re.match(r'^e+r+m*$', w_text) 
+                or re.match(r'^a+h+$', w_text) 
+                or re.match(r'^h+m+$', w_text)
+            ):
+                w_fillers += 1
 
         # 2. Pauses in this window
         w_pause_sec = 0.0

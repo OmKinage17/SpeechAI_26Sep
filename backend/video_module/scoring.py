@@ -1,4 +1,4 @@
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional
 from video_module.config import (
     DEFAULT_WEIGHTS,
     IDEAL_WPM_BANDS,

@@ -10,6 +10,7 @@ import {
   User,
   MessageSquare
 } from 'lucide-react';
+import { useFaceTracking } from '../hooks/useFaceTracking';
 
 interface RecorderPanelProps {
   stream: MediaStream | null;
@@ -42,6 +43,53 @@ const DEFAULT_PROMPTS = {
   ]
 };
 
+const renderLiveTranscriptWithFillers = (text: string) => {
+  if (!text) return null;
+  const words = text.split(/\s+/);
+  let liveFillerCount = 0;
+
+  const wordSpans = words.map((w, idx) => {
+    const cleanWord = w.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?"]/g, '');
+    const isFiller =
+      /^(u+m+h*|u+h+m*|e+r+m*|a+h+|h+m+)$/.test(cleanWord) ||
+      ['like', 'actually', 'basically', 'so', 'well', 'literally', 'honestly'].includes(cleanWord);
+
+    if (isFiller) {
+      liveFillerCount++;
+      return (
+        <span
+          key={idx}
+          style={{
+            backgroundColor: 'rgba(245, 158, 11, 0.25)',
+            color: '#f59e0b',
+            padding: '1px 5px',
+            borderRadius: '3px',
+            fontWeight: 700,
+            border: '1px solid rgba(245, 158, 11, 0.4)',
+            margin: '0 2px',
+            display: 'inline-block'
+          }}
+          title="Live detected filler word"
+        >
+          {w}
+        </span>
+      );
+    }
+    return <span key={idx}> {w}</span>;
+  });
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+      {liveFillerCount > 0 && (
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', alignSelf: 'flex-start', background: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b', padding: '3px 10px', borderRadius: '12px', fontSize: '11px', fontWeight: 600 }}>
+          <span>⚡ {liveFillerCount} live filler {liveFillerCount === 1 ? 'word' : 'words'} flagged</span>
+        </div>
+      )}
+      <div style={{ lineHeight: 1.7 }}>{wordSpans}</div>
+    </div>
+  );
+};
+
 export const RecorderPanel: React.FC<RecorderPanelProps> = ({
   stream,
   taskConfig,
@@ -59,11 +107,13 @@ export const RecorderPanel: React.FC<RecorderPanelProps> = ({
 
   // Audio Question Reader (SpeechSynthesis) state
   const [isSpeakingQuestion, setIsSpeakingQuestion] = useState(false);
-  const [spokenCharIndex, setSpokenCharIndex] = useState(0);
+  const [, setSpokenCharIndex] = useState(0);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
   const liveVideoRef = useRef<HTMLVideoElement | null>(null);
   const reviewVideoRef = useRef<HTMLVideoElement | null>(null);
+  
+  const { faceBox, isModelLoading } = useFaceTracking(liveVideoRef, stream, !recordedUrl && isRecording);
 
   const activePrompt = taskConfig.taskType === 'custom_topic'
     ? (taskConfig.customParagraph || "")
@@ -302,6 +352,23 @@ export const RecorderPanel: React.FC<RecorderPanelProps> = ({
               <>
                 <video ref={liveVideoRef} autoPlay playsInline muted className="vid-camera-video" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                 
+                {/* Dynamic Tracking Box during recording */}
+                {faceBox && !isModelLoading && (
+                  <div 
+                    className="vid-face-guide-overlay"
+                    style={{
+                      left: `${faceBox.x}%`,
+                      top: `${faceBox.y}%`,
+                      width: `${faceBox.width}%`,
+                      height: `${faceBox.height}%`,
+                      borderColor: isRecording ? 'var(--error)' : 'rgba(99, 102, 241, 0.8)',
+                      boxShadow: isRecording 
+                        ? '0 0 20px rgba(239, 68, 68, 0.3), inset 0 0 10px rgba(239, 68, 68, 0.2)'
+                        : '0 0 20px rgba(99, 102, 241, 0.3), inset 0 0 10px rgba(99, 102, 241, 0.2)'
+                    }}
+                  />
+                )}
+
                 {/* 3-2-1 Countdown Overlay */}
                 {countdown !== null && (
                   <div style={{
@@ -404,7 +471,7 @@ export const RecorderPanel: React.FC<RecorderPanelProps> = ({
                 })}
               </div>
             ) : (
-              liveTranscript ? liveTranscript : (isRecording ? "Listening..." : "Your speech will appear here while recording.")
+              liveTranscript ? renderLiveTranscriptWithFillers(liveTranscript) : (isRecording ? "Listening..." : "Your speech will appear here while recording.")
             )}
           </div>
         </div>

@@ -1,6 +1,5 @@
 import os
 import shutil
-import time
 import logging
 from datetime import datetime
 from typing import Dict, Any, Optional
@@ -77,14 +76,15 @@ async def process_video_job(
 
         if has_audio and whisper_model:
             try:
-                initial_prompt = "Umm, uh, like, you know, actually, basically, so, well."
+                initial_prompt = "Um, uh, umm, uhh, er, ah, hmm, like, you know, actually, basically, so, well, i mean."
                 whisper_res = whisper_model.transcribe(
                     temp_wav_path,
                     initial_prompt=initial_prompt,
+                    condition_on_previous_text=False,
                     word_timestamps=True,
                     language="en"
                 )
-                speech_features = extract_speech_features(whisper_res, duration_sec)
+                speech_features = extract_speech_features(whisper_res, duration_sec, wav_path=temp_wav_path)
                 if duration_sec <= 0.0 and speech_features.get("words_list"):
                     duration_sec = speech_features["words_list"][-1].get("end", 1.0)
             except Exception as e:

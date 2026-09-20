@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
-import { Camera, Mic, CheckCircle2, AlertTriangle, ArrowRight, ShieldCheck } from 'lucide-react';
+import { Camera, Mic, CheckCircle2, AlertTriangle, ArrowRight, ShieldCheck, Loader2 } from 'lucide-react';
+import { useFaceTracking } from '../hooks/useFaceTracking';
 
 interface SetupCheckProps {
   stream: MediaStream | null;
@@ -17,6 +18,9 @@ export const SetupCheck: React.FC<SetupCheckProps> = ({
   onStartCamera
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  
+  // Use the new face tracking hook
+  const { faceBox, isModelLoading } = useFaceTracking(videoRef, stream, true);
 
   useEffect(() => {
     if (videoRef.current && stream) {
@@ -34,9 +38,42 @@ export const SetupCheck: React.FC<SetupCheckProps> = ({
         {hasStream ? (
           <>
             <video ref={videoRef} autoPlay playsInline muted className="vid-camera-video" />
-            <div className="vid-face-guide-overlay">
-              <span className="vid-face-guide-text">Align Face Here</span>
-            </div>
+            
+            {/* Dynamic Tracking Box */}
+            {faceBox && !isModelLoading && (
+              <div 
+                className="vid-face-guide-overlay"
+                style={{
+                  left: `${faceBox.x}%`,
+                  top: `${faceBox.y}%`,
+                  width: `${faceBox.width}%`,
+                  height: `${faceBox.height}%`
+                }}
+              >
+                <span className="vid-face-guide-text">Face Detected</span>
+              </div>
+            )}
+            
+            {/* Loading Indicator */}
+            {isModelLoading && (
+              <div style={{
+                position: 'absolute',
+                top: '50%',
+                left: '50%',
+                transform: 'translate(-50%, -50%)',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '8px',
+                background: 'rgba(10, 14, 26, 0.75)',
+                padding: '16px 24px',
+                borderRadius: 'var(--radius-md)',
+                color: 'white'
+              }}>
+                <Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} />
+                <span style={{ fontSize: '13px', fontWeight: 500 }}>Loading AI Face Tracker...</span>
+              </div>
+            )}
           </>
         ) : (
           <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-secondary)' }}>
@@ -72,7 +109,9 @@ export const SetupCheck: React.FC<SetupCheckProps> = ({
               <div>
                 <p style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>Video Feed</p>
                 <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-                  {hasStream ? 'Camera active. Center your head inside the dashed oval.' : 'Camera waiting for permission.'}
+                  {hasStream 
+                    ? (faceBox ? 'Camera active. Face successfully tracked.' : 'Camera active. Detecting face...') 
+                    : 'Camera waiting for permission.'}
                 </p>
               </div>
             </div>

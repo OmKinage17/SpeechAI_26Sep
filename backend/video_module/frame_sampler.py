@@ -1,7 +1,6 @@
 import os
 import subprocess
 import logging
-import glob
 from typing import List, Tuple
 from video_module.config import FRAME_SAMPLE_FPS
 
