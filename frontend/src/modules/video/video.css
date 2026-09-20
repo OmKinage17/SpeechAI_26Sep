@@ -16,11 +16,19 @@
   justify-content: space-between;
   align-items: center;
   background: linear-gradient(135deg, rgba(30, 41, 59, 0.4), rgba(19, 27, 46, 0.7));
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   padding: 24px 32px;
   position: relative;
   overflow: hidden;
+  transition: var(--transition-normal);
+}
+
+.vid-hero-card:hover {
+  border-color: rgba(255, 255, 255, 0.15);
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
 }
 
 .vid-hero-card::before {
@@ -402,6 +410,8 @@
 /* Interactive AI Interviewer Box */
 .vid-interview-card {
   background: linear-gradient(135deg, rgba(24, 34, 58, 0.7), rgba(15, 23, 42, 0.85));
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   border: 1px solid rgba(129, 140, 248, 0.3);
   border-left: 4px solid var(--primary);
   border-radius: var(--radius-md);
@@ -411,6 +421,13 @@
   gap: 12px;
   box-shadow: 0 4px 20px rgba(99, 102, 241, 0.12);
   animation: fadeIn 0.3s ease;
+  transition: var(--transition-normal);
+}
+
+.vid-interview-card:hover {
+  border-color: rgba(129, 140, 248, 0.5);
+  transform: translateY(-2px);
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
 }
 
 .vid-speaker-pill {
@@ -452,12 +469,21 @@
 /* Custom Topic Generator Styles */
 .vid-topic-generator {
   background: linear-gradient(135deg, rgba(30, 41, 59, 0.5), rgba(15, 23, 42, 0.75));
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   padding: 16px 20px;
   display: flex;
   flex-direction: column;
   gap: 14px;
+  transition: var(--transition-normal);
+}
+
+.vid-topic-generator:hover {
+  border-color: rgba(255, 255, 255, 0.15);
+  transform: translateY(-2px);
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
 }
 
 .vid-quick-chips {
@@ -492,6 +518,8 @@
 
 .vid-teleprompter-card {
   background: rgba(15, 23, 42, 0.65);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   border: 1px solid rgba(168, 85, 247, 0.3);
   border-left: 4px solid var(--accent);
   border-radius: var(--radius-md);
@@ -500,4 +528,11 @@
   line-height: 1.65;
   color: var(--text-primary);
   position: relative;
+  transition: var(--transition-normal);
+}
+
+.vid-teleprompter-card:hover {
+  border-color: rgba(168, 85, 247, 0.5);
+  transform: translateY(-2px);
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
 }

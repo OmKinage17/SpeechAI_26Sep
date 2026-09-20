@@ -2,7 +2,9 @@ import React, { useState, useEffect } from 'react';
 import './video.css';
 import { useMediaRecorder } from './hooks/useMediaRecorder';
 import { SetupCheck } from './components/SetupCheck';
+import { ModuleConfigPanel } from './components/ModuleConfigPanel';
 import { RecorderPanel } from './components/RecorderPanel';
+import { PronunciationHighlight } from './components/PronunciationHighlight';
 import { ProcessingView } from './components/ProcessingView';
 import { ScoreOverview } from './components/ScoreOverview';
 import { FusionTimeline } from './components/FusionTimeline';
@@ -18,11 +20,15 @@ interface VideoAnalysisModuleProps {
   currentUser: { id: string; name: string; email: string } | null;
 }
 
-type ModuleStep = 'setup' | 'record' | 'processing' | 'results';
+type ModuleStep = 'setup' | 'config' | 'record' | 'processing' | 'results';
 
 export const VideoAnalysisModule: React.FC<VideoAnalysisModuleProps> = ({ currentUser }) => {
   const [activeSubTab, setActiveSubTab] = useState<'practice' | 'history'>('practice');
   const [step, setStep] = useState<ModuleStep>('setup');
+  const [moduleConfig, setModuleConfig] = useState<{
+    taskType: 'free_talk' | 'interview' | 'custom_topic';
+    customParagraph?: string;
+  } | null>(null);
   const [currentJobStage, setCurrentJobStage] = useState<string>('uploading');
   const [currentSession, setCurrentSession] = useState<VideoSessionDetail | null>(null);
   const [historySessions, setHistorySessions] = useState<VideoSessionDetail[]>([]);
@@ -51,8 +57,9 @@ export const VideoAnalysisModule: React.FC<VideoAnalysisModuleProps> = ({ curren
   useEffect(() => {
     if (activeSubTab === 'history') {
       fetchUserVideoReports(userId).then(setHistorySessions);
+      stopCamera();
     }
-  }, [activeSubTab, userId]);
+  }, [activeSubTab, userId, stopCamera]);
 
   // Handle video submission
   const handleSubmitRecording = async (taskType: string, promptText: string) => {
@@ -60,6 +67,7 @@ export const VideoAnalysisModule: React.FC<VideoAnalysisModuleProps> = ({ curren
     setStep('processing');
     setCurrentJobStage('uploading');
     setSubmitError(null);
+    stopCamera();
 
     try {
       const jobRes = await submitVideoAnalysis(recordedBlob, taskType, promptText);
@@ -77,7 +85,6 @@ export const VideoAnalysisModule: React.FC<VideoAnalysisModuleProps> = ({ curren
             clearInterval(pollInterval);
             setCurrentSession(detail);
             setStep('results');
-            stopCamera();
           } else if (detail.status === 'FAILED') {
             clearInterval(pollInterval);
             setSubmitError(detail.error || 'Video analysis failed on server.');
@@ -174,14 +181,24 @@ export const VideoAnalysisModule: React.FC<VideoAnalysisModuleProps> = ({ curren
                 if (!stream) {
                   startCamera();
                 }
+                setStep('config');
+              }}
+            />
+          )}
+
+          {step === 'config' && (
+            <ModuleConfigPanel
+              onStartSession={(cfg) => {
+                setModuleConfig(cfg);
                 setStep('record');
               }}
             />
           )}
 
-          {step === 'record' && (
+          {step === 'record' && moduleConfig && (
             <RecorderPanel
               stream={stream}
+              taskConfig={moduleConfig}
               isRecording={isRecording}
               recordingTime={recordingTime}
               recordedUrl={recordedUrl}
@@ -216,12 +233,19 @@ export const VideoAnalysisModule: React.FC<VideoAnalysisModuleProps> = ({ curren
 
               {/* 1.5 Detailed Speech Analytics */}
               {currentSession.speech && (
-                <SpeechDetailedMetrics
-                  speech={currentSession.speech}
-                  durationSec={currentSession.duration_sec}
-                />
+                <>
+                  <SpeechDetailedMetrics
+                    speech={currentSession.speech}
+                    durationSec={currentSession.duration_sec}
+                  />
+                  {currentSession.prompt_text && (
+                    <PronunciationHighlight
+                      targetText={currentSession.prompt_text}
+                      spokenText={currentSession.speech.transcript}
+                    />
+                  )}
+                </>
               )}
-
 
               {/* 2. 5-Second Window Fusion Timeline */}
               <FusionTimeline timeline={currentSession.timeline} />

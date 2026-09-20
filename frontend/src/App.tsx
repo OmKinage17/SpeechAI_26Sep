@@ -1164,13 +1164,13 @@ function App() {
             <BarChart3 size={16} />
             <span><span className="nav-module-prefix">Module 2: </span>Fluency</span>
           </button>
-          <button className={`nav-tab-btn ${activeTab === 'exercises' ? 'active' : ''}`} onClick={() => { setActiveTab('exercises'); setStatus('idle'); setStatusMessage('Ready to record'); }}>
-            <Compass size={16} />
-            <span>Exercises</span>
-          </button>
           <button className={`nav-tab-btn ${activeTab === 'video' ? 'active' : ''}`} onClick={() => { setActiveTab('video'); setStatus('idle'); setStatusMessage('Ready to record'); }}>
             <VideoIcon size={16} />
             <span><span className="nav-module-prefix">Module 3: </span>Video</span>
+          </button>
+          <button className={`nav-tab-btn ${activeTab === 'exercises' ? 'active' : ''}`} onClick={() => { setActiveTab('exercises'); setStatus('idle'); setStatusMessage('Ready to record'); }}>
+            <Compass size={16} />
+            <span>Exercises</span>
           </button>
         </div>
         

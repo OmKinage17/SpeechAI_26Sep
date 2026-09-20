@@ -25,12 +25,6 @@ export const SetupCheck: React.FC<SetupCheckProps> = ({
     }
   }, [stream]);
 
-  useEffect(() => {
-    if (!stream) {
-      onStartCamera();
-    }
-  }, [stream, onStartCamera]);
-
   const hasStream = stream !== null && stream.active;
 
   return (

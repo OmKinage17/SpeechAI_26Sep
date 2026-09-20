@@ -1,0 +1,185 @@
+import React, { useState } from 'react';
+import { MessageSquare, Clock, Sparkles, RefreshCw, ArrowRight } from 'lucide-react';
+
+interface ModuleConfigPanelProps {
+  onStartSession: (config: {
+    taskType: 'free_talk' | 'interview' | 'custom_topic';
+    customParagraph?: string;
+  }) => void;
+}
+
+const QUICK_TOPICS = [
+  "Artificial Intelligence",
+  "Space Exploration",
+  "Leadership & Teamwork",
+  "Climate Action",
+  "Healthy Daily Habits",
+  "Future of Remote Work"
+];
+
+export const ModuleConfigPanel: React.FC<ModuleConfigPanelProps> = ({ onStartSession }) => {
+  const [taskType, setTaskType] = useState<'free_talk' | 'interview' | 'custom_topic'>('free_talk');
+  
+  // Custom Topic states
+  const [aiTopic, setAiTopic] = useState('Artificial Intelligence');
+  const [aiLength, setAiLength] = useState<'sentence' | 'paragraph' | 'long_paragraph'>('paragraph');
+  const [aiFocusExercise, setAiFocusExercise] = useState('none');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generatedText, setGeneratedText] = useState<string | null>(null);
+
+  const handleGenerate = async (topicParam: string = aiTopic) => {
+    setIsGenerating(true);
+    setGeneratedText(null);
+    try {
+      const url = `http://127.0.0.1:8000/practice/generate?topic=${encodeURIComponent(topicParam)}&length=${aiLength}&exercise_id=${aiFocusExercise}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        setGeneratedText(data.text);
+      } else {
+        throw new Error('Failed to generate paragraph');
+      }
+    } catch (e) {
+      console.error(e);
+      const fallbackText = "Speaking in front of an audience can be intimidating at first, but with steady pacing and deliberate breaths, anyone can deliver a powerful message.";
+      setGeneratedText(fallbackText);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const handleStart = () => {
+    onStartSession({
+      taskType,
+      customParagraph: taskType === 'custom_topic' ? (generatedText || "Please generate a topic first.") : undefined
+    });
+  };
+
+  return (
+    <div style={{ maxWidth: '800px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '24px' }}>
+      <h2 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-primary)' }}>Select Practice Mode</h2>
+      
+      <div className="vid-task-selector">
+        <div
+          className={`vid-task-option ${taskType === 'free_talk' ? 'active' : ''}`}
+          onClick={() => setTaskType('free_talk')}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+            <MessageSquare size={16} style={{ color: 'var(--primary)' }} />
+            <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>Free Talk</span>
+          </div>
+          <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Conversational prompts (120-150 WPM)</p>
+        </div>
+
+        <div
+          className={`vid-task-option ${taskType === 'interview' ? 'active' : ''}`}
+          onClick={() => setTaskType('interview')}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+            <Clock size={16} style={{ color: 'var(--secondary)' }} />
+            <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>Interview Answer</span>
+          </div>
+          <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>AI Interviewer speaks questions</p>
+        </div>
+
+        <div
+          className={`vid-task-option ${taskType === 'custom_topic' ? 'active' : ''}`}
+          onClick={() => setTaskType('custom_topic')}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+            <Sparkles size={16} style={{ color: 'var(--accent)' }} />
+            <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>Custom Topic AI</span>
+          </div>
+          <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Generate reading passages on any topic</p>
+        </div>
+      </div>
+
+      {taskType === 'custom_topic' && (
+        <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-primary)' }}>Generator Settings</h3>
+          
+          <div className="vid-quick-chips">
+            {QUICK_TOPICS.map(topic => (
+              <button
+                key={topic}
+                type="button"
+                className={`vid-chip-btn ${aiTopic === topic ? 'active' : ''}`}
+                onClick={() => {
+                  setAiTopic(topic);
+                  handleGenerate(topic);
+                }}
+              >
+                {topic}
+              </button>
+            ))}
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: '10px', alignItems: 'flex-end' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '4px' }}>Topic Keyword</label>
+              <input
+                type="text"
+                className="form-input"
+                style={{ padding: '7px 12px', fontSize: '13px', width: '100%' }}
+                value={aiTopic}
+                onChange={(e) => setAiTopic(e.target.value)}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '4px' }}>Length</label>
+              <select
+                className="form-input"
+                style={{ width: '100%', padding: '7px 10px', fontSize: '13px' }}
+                value={aiLength}
+                onChange={(e) => setAiLength(e.target.value as any)}
+              >
+                <option value="sentence">Sentence</option>
+                <option value="paragraph">Paragraph</option>
+                <option value="long_paragraph">Long Paragraph</option>
+              </select>
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '4px' }}>Focus Drill</label>
+              <select
+                className="form-input"
+                style={{ width: '100%', padding: '7px 10px', fontSize: '13px' }}
+                value={aiFocusExercise}
+                onChange={(e) => setAiFocusExercise(e.target.value)}
+              >
+                <option value="none">Standard</option>
+                <option value="silent_pause_drill">Silent Pause</option>
+                <option value="slow_rate_reading">Slow Rate</option>
+              </select>
+            </div>
+            <button
+              className="vid-btn-secondary"
+              onClick={() => handleGenerate()}
+              disabled={isGenerating}
+              style={{ padding: '8px 18px', fontSize: '13px' }}
+            >
+              {isGenerating ? <RefreshCw size={14} className="spin" /> : <Sparkles size={14} />} Generate
+            </button>
+          </div>
+
+          {generatedText && (
+            <div style={{ background: 'rgba(255,255,255,0.05)', padding: '12px', borderRadius: '8px', fontSize: '14px', lineHeight: 1.5 }}>
+              {generatedText}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '16px' }}>
+        <button
+          className="vid-btn-primary"
+          onClick={handleStart}
+          disabled={taskType === 'custom_topic' && !generatedText}
+          style={{ padding: '12px 24px', fontSize: '16px' }}
+        >
+          <span>Continue to Recording</span>
+          <ArrowRight size={18} />
+        </button>
+      </div>
+    </div>
+  );
+};
