@@ -1,7 +1,10 @@
+import asyncio
 import requests
 import wave
 import struct
 import os
+
+import main
 
 def generate_silent_wav(path, duration=2.0, sample_rate=16000):
     with wave.open(path, 'wb') as wav_file:
@@ -63,6 +66,16 @@ def test_analyze_endpoint():
         if os.path.exists(temp_audio):
             os.remove(temp_audio)
 
+def test_tts_audio_is_buffered_before_playback():
+    async def fake_stream():
+        yield {"type": "audio", "data": b"abc"}
+        yield {"type": "audio", "data": b"def"}
+        yield {"type": "audio", "data": b"ghi"}
+
+    result = asyncio.run(main.collect_tts_audio(fake_stream()))
+    assert result == b"abcdefghi"
+
 if __name__ == "__main__":
     test_practice_endpoint()
     test_analyze_endpoint()
+    test_tts_audio_is_buffered_before_playback()

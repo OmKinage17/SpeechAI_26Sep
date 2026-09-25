@@ -20,6 +20,7 @@ def run_script(name):
     test_path = os.path.join(tests_dir, name)
     env = os.environ.copy()
     env["PYTHONPATH"] = backend_dir
+    env["PYTHONIOENCODING"] = "utf-8"
     res = subprocess.run([sys.executable, test_path], capture_output=True, text=True, encoding='utf-8', cwd=backend_dir, env=env)
     print(res.stdout)
     if res.stderr:
@@ -32,7 +33,7 @@ def main():
         "test_streak_logic.py",
         "test_fluency_analytics.py",
         "test_auth_flow.py",
-        "test_grok_generation.py",
+        "test_groq_generation.py",
         "test_pronunciation_alignment.py",
         "test_speech_pathology_analysis.py",
         "test_feedback_evaluation.py"

@@ -5,6 +5,7 @@ import time
 from datetime import datetime
 from typing import Dict, Any, Optional
 import cv2
+import httpx
 
 from video_module.media_utils import extract_audio, probe_video
 from video_module.frame_sampler import sample_frames
@@ -144,6 +145,41 @@ async def process_video_job(
         )
 
         feedback_items = generate_multimodal_feedback(speech_features, visual_features, overall_scores)
+
+        # Gemini Evaluation: Small, concise multimodal suggestions
+        gemini_key = os.getenv("GEMINI_API_KEY")
+        if gemini_key:
+            try:
+                g_prompt = (
+                    "You are an expert speech pathologist and body language coach. Evaluate this multimodal presentation session:\n"
+                    f"- Spoken Pace: {speech_features.get('wpm', 0.0)} WPM, Filler count: {speech_features.get('filler_count', 0)}\n"
+                    f"- Eye Contact: {int(visual_features.get('camera_facing_ratio', 0.0) * 100)}% to camera\n"
+                    f"- Head Stability: {round(visual_features.get('head_motion', 0.0), 3)} motion index\n"
+                    f"- Postural Composure: {int((visual_features.get('posture_ok_ratio') or 0.8) * 100)}% level\n"
+                    f"- Overall Score: {overall_scores.get('overall_100', 80)}/100\n\n"
+                    "Provide exactly 2 small, concise, actionable suggestions (under 25 words each). "
+                    "Return each suggestion starting with a dash (-)."
+                )
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    g_res = await client.post(
+                        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+                        headers={"x-goog-api-key": gemini_key, "Content-Type": "application/json"},
+                        json={"contents": [{"parts": [{"text": g_prompt}]}]}
+                    )
+                    if g_res.status_code == 200:
+                        parts = g_res.json().get("candidates", [])[0].get("content", {}).get("parts", [])
+                        if parts:
+                            lines = [l.strip().lstrip("-*• ") for l in parts[0].get("text", "").splitlines() if l.strip()]
+                            for line in lines[:2]:
+                                if line:
+                                    feedback_items.append({
+                                        "category": "speech" if any(w in line.lower() for w in ["pace", "pause", "filler", "word", "breath", "speed", "vocal"]) else "non_verbal",
+                                        "severity": "tip",
+                                        "message": f"Gemini Coach: {line}"
+                                    })
+            except Exception as e:
+                logger.warning(f"Error querying Gemini for multimodal evaluation: {e}")
+
         timings["scoring_sec"] = round(time.time() - t3, 2)
 
         total_proc_time = round(time.time() - start_time, 2)

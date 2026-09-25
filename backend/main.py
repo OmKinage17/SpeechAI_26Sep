@@ -23,7 +23,7 @@ import jiwer
 
 from audio_utils import convert_to_wav
 import httpx
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 import wave
 import numpy as np
 
@@ -270,11 +270,13 @@ def detect_acoustic_filled_pauses(wav_path: Optional[str], words_list: Optional[
 def detect_fillers(
     transcript: str, 
     wav_path: Optional[str] = None, 
-    words_list: Optional[list] = None
-) -> tuple[int, List[str]]:
+    words_list: Optional[list] = None,
+    return_details: bool = False
+):
     text_lower = transcript.lower()
     filler_count = 0
     fillers_found = []
+    filler_details = []
 
     # 1. Multi-word phrase fillers
     phrase_fillers = [
@@ -284,11 +286,28 @@ def detect_fillers(
     remaining_text = text_lower
     for phrase in phrase_fillers:
         pattern = rf'\b{re.escape(phrase)}\b'
-        matches = re.findall(pattern, text_lower)
+        matches = list(re.finditer(pattern, text_lower))
         if matches:
             filler_count += len(matches)
             fillers_found.append(phrase)
             remaining_text = re.sub(pattern, ' ', remaining_text)
+
+            # If words_list with timestamps is provided, match word positions
+            if words_list:
+                p_parts = phrase.split()
+                p_len = len(p_parts)
+                for i in range(len(words_list) - p_len + 1):
+                    sub_words = [re.sub(r'[^\w]', '', words_list[i + k].get("word", "")).lower() for k in range(p_len)]
+                    if sub_words == p_parts:
+                        s_time = round(float(words_list[i].get("start", 0.0)), 1)
+                        e_time = round(float(words_list[i + p_len - 1].get("end", 0.0)), 1)
+                        dur = round(max(0.1, e_time - s_time), 1)
+                        filler_details.append({
+                            "word": phrase,
+                            "start": s_time,
+                            "end": e_time,
+                            "duration": dur
+                        })
 
     # 2. Single-word fillers and hesitations
     cleaned_remaining = re.sub(r'[.,\/#!$%\^&\*;:{}=\-_`~()?"]', ' ', remaining_text)
@@ -325,6 +344,46 @@ def detect_fillers(
             if "hmm" not in fillers_found:
                 fillers_found.append("hmm")
 
+    # Locate single-word timestamps in words_list
+    if words_list:
+        for w_obj in words_list:
+            raw_w = w_obj.get("word", "")
+            cw = re.sub(r'[^\w]', '', raw_w).lower()
+            if not cw:
+                continue
+            is_filler = False
+            tag_word = cw
+            if cw in single_word_fillers:
+                is_filler = True
+                tag_word = cw
+            elif re.match(r'^u+m+h*$', cw):
+                is_filler = True
+                tag_word = "um"
+            elif re.match(r'^u+h+m*$', cw):
+                is_filler = True
+                tag_word = "uh"
+            elif re.match(r'^e+r+m*$', cw):
+                is_filler = True
+                tag_word = "er/erm"
+            elif re.match(r'^a+h+$', cw):
+                is_filler = True
+                tag_word = "ah"
+            elif re.match(r'^h+m+$', cw):
+                is_filler = True
+                tag_word = "hmm"
+            
+            if is_filler:
+                s_time = round(float(w_obj.get("start", 0.0)), 1)
+                e_time = round(float(w_obj.get("end", 0.0)), 1)
+                dur = round(max(0.1, e_time - s_time), 1)
+                if not any(f["start"] == s_time and f["word"] == tag_word for f in filler_details):
+                    filler_details.append({
+                        "word": tag_word,
+                        "start": s_time,
+                        "end": e_time,
+                        "duration": dur
+                    })
+
     # 3. Acoustic filled-pause detection (inter-word gap analysis)
     if wav_path and words_list:
         acoustic_fillers = detect_acoustic_filled_pauses(wav_path, words_list)
@@ -332,19 +391,37 @@ def detect_fillers(
             filler_count += len(acoustic_fillers)
             if "vocal hesitation (uh/um)" not in fillers_found:
                 fillers_found.append("vocal hesitation (uh/um)")
+            for af in acoustic_fillers:
+                filler_details.append({
+                    "word": "vocal hesitation (uh/um)",
+                    "start": af["start"],
+                    "end": af["end"],
+                    "duration": af["duration"]
+                })
 
+    filler_details.sort(key=lambda x: x["start"])
+
+    if return_details:
+        return filler_count, fillers_found, filler_details
     return filler_count, fillers_found
 
-def detect_stammering(transcript: str) -> int:
+def detect_stammering(
+    transcript: str,
+    words_list: Optional[list] = None,
+    return_details: bool = False
+):
     text_lower = transcript.lower()
     stammer_events = 0
+    stammer_details = []
 
+    # 1. Syllable prefix repetitions
     reps_3 = re.findall(r'\b([a-zA-Z]{1,3})-\1-\1\b', text_lower)
     cleaned_text_reps_3_removed = re.sub(r'\b([a-zA-Z]{1,3})-\1-\1\b', ' ', text_lower)
     reps_2 = re.findall(r'\b([a-zA-Z]{1,3})-\1\b', cleaned_text_reps_3_removed)
     
     stammer_events += len(reps_3) + len(reps_2)
 
+    # 2. Consecutive word repetitions
     cleaned_words = clean_text(text_lower).split()
     word_repetitions = 0
     for i in range(len(cleaned_words) - 1):
@@ -352,6 +429,42 @@ def detect_stammering(transcript: str) -> int:
             word_repetitions += 1
 
     stammer_events += word_repetitions
+
+    # If words_list with timestamps is available, locate occurrences
+    if words_list:
+        for i in range(len(words_list) - 1):
+            w1 = re.sub(r'[^\w]', '', words_list[i].get("word", "")).lower()
+            w2 = re.sub(r'[^\w]', '', words_list[i+1].get("word", "")).lower()
+            if w1 and w1 == w2:
+                s_time = round(float(words_list[i].get("start", 0.0)), 1)
+                e_time = round(float(words_list[i+1].get("end", 0.0)), 1)
+                dur = round(max(0.2, e_time - s_time), 1)
+                stammer_details.append({
+                    "text": f"{w1} {w2}",
+                    "type": "word repetition",
+                    "start": s_time,
+                    "end": e_time,
+                    "duration": dur
+                })
+
+        for w_obj in words_list:
+            raw_w = w_obj.get("word", "").strip().lower()
+            if re.search(r'\b[a-zA-Z]{1,3}-[a-zA-Z]{1,3}', raw_w):
+                s_time = round(float(w_obj.get("start", 0.0)), 1)
+                e_time = round(float(w_obj.get("end", 0.0)), 1)
+                dur = round(max(0.2, e_time - s_time), 1)
+                stammer_details.append({
+                    "text": raw_w,
+                    "type": "syllable prolongation",
+                    "start": s_time,
+                    "end": e_time,
+                    "duration": dur
+                })
+
+    stammer_details.sort(key=lambda x: x["start"])
+
+    if return_details:
+        return stammer_events, stammer_details
     return stammer_events
 
 def evaluate_condition(condition: str, context: dict) -> bool:
@@ -602,53 +715,25 @@ def read_root():
     }
 
 # ==========================================
-# LLM HELPER (Gemini 2.5 Flash + Groq Cloud Failover)
+# LLM HELPERS (Groq for Text Generation + Gemini for Evaluation & Suggestions)
 # ==========================================
-async def query_llm(prompt: str, system_prompt: str = "You are a professional speech therapy assistant.") -> tuple[Optional[str], Optional[str]]:
+async def generate_custom_text_with_groq(
+    prompt: str,
+    system_prompt: str = "You are a professional speech therapy assistant. Output raw practice text only."
+) -> tuple[Optional[str], Optional[str]]:
     """
-    Queries Google Gemini API or Groq Cloud API with graceful failover.
-    Returns (response_text, provider_name) or (None, None).
+    Uses Groq API Key to generate customized speech practice texts.
+    Falls back gracefully to Gemini or other providers if Groq is unavailable.
     """
+    groq_key = os.getenv("GROQ_API_KEY")
     gemini_key = os.getenv("GEMINI_API_KEY")
-    groq_key = os.getenv("GROK_API_KEY")
-    xai_key = os.getenv("XAI_API_KEY")
 
-    # 1. Try Google Gemini API (gemini-2.5-flash)
-    if gemini_key:
-        try:
-            logger.info("Querying Google Gemini 2.5 Flash API...")
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                full_text = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
-                res = await client.post(
-                    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
-                    headers={
-                        "x-goog-api-key": gemini_key,
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "contents": [{"parts": [{"text": full_text}]}]
-                    }
-                )
-                if res.status_code == 200:
-                    data = res.json()
-                    candidates = data.get("candidates", [])
-                    if candidates:
-                        text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
-                        if text:
-                            if text.startswith('"') and text.endswith('"'):
-                                text = text[1:-1]
-                            logger.info("Successfully received response from Google Gemini API.")
-                            return text, "Google Gemini"
-                else:
-                    logger.warning(f"Gemini API returned status {res.status_code}: {res.text[:150]}")
-        except Exception as e:
-            logger.warning(f"Error querying Gemini API: {e}")
-
-    # 2. Try Groq Cloud (openai/gpt-oss-120b or openai/gpt-oss-20b)
+    # 1. Primary: Query Groq Cloud API
     if groq_key:
-        for model in ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
+        groq_models = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b", "allam-2-7b"]
+        for model in groq_models:
             try:
-                logger.info(f"Querying Groq Cloud API using model={model}...")
+                logger.info(f"Generating customized text via Groq API (model={model})...")
                 async with httpx.AsyncClient(timeout=15.0) as client:
                     res = await client.post(
                         "https://api.groq.com/openai/v1/chat/completions",
@@ -670,54 +755,223 @@ async def query_llm(prompt: str, system_prompt: str = "You are a professional sp
                         text = data["choices"][0]["message"]["content"].strip()
                         if text.startswith('"') and text.endswith('"'):
                             text = text[1:-1]
-                        logger.info(f"Successfully received response from Groq Cloud ({model}).")
+                        logger.info(f"Successfully generated customized text from Groq ({model}).")
                         return text, "Groq Cloud"
                     else:
-                        logger.warning(f"Groq API model {model} returned status {res.status_code}: {res.text[:150]}")
+                        logger.warning(f"Groq API ({model}) returned status {res.status_code}: {res.text[:120]}")
             except Exception as e:
                 logger.warning(f"Error querying Groq API with {model}: {e}")
 
-    # 3. Try xAI API
-    if xai_key:
+    # Fallback to Gemini if Groq unavailable
+    if gemini_key:
+        for model in ["gemini-2.5-flash", "gemini-1.5-flash"]:
+            try:
+                logger.info(f"Fallback text generation via Google Gemini ({model})...")
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    full_text = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+                    res = await client.post(
+                        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                        headers={
+                            "x-goog-api-key": gemini_key,
+                            "Content-Type": "application/json"
+                        },
+                        json={"contents": [{"parts": [{"text": full_text}]}]}
+                    )
+                    if res.status_code == 200:
+                        candidates = res.json().get("candidates", [])
+                        if candidates:
+                            text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
+                            if text:
+                                if text.startswith('"') and text.endswith('"'):
+                                    text = text[1:-1]
+                                return text, "Google Gemini"
+            except Exception as e:
+                logger.warning(f"Error in Gemini fallback text generation: {e}")
+
+    return None, None
+
+
+async def evaluate_results_with_gemini(
+    transcript: str,
+    wpm: float,
+    filler_count: int,
+    filler_words_found: list[str],
+    stammer_events: int,
+    long_pauses: int,
+    target_sentence: Optional[str] = None,
+    wer: Optional[float] = None
+) -> tuple[Optional[str], Optional[str]]:
+    """
+    Uses Gemini API Key to evaluate speech session results and provide small and concise suggestions.
+    Falls back gracefully to Groq or rule-based suggestions if Gemini is unavailable.
+    """
+    gemini_key = os.getenv("GEMINI_API_KEY")
+    groq_key = os.getenv("GROQ_API_KEY")
+
+    target_info = ""
+    if target_sentence:
+        target_info = f"\n- Target sentence was: \"{target_sentence}\""
+        if wer is not None:
+            target_info += f"\n- Word error rate: {round(wer * 100, 1)}%"
+
+    fillers_str = ", ".join(filler_words_found) if filler_words_found else "none"
+
+    eval_prompt = (
+        "You are an expert speech-language pathologist and communication coach.\n"
+        "Evaluate the speaker's performance from their session metrics:\n"
+        f"- Spoken transcript: \"{transcript}\"\n"
+        f"- Speed: {round(wpm, 1)} WPM (optimal conversational pace: 130-150 WPM)\n"
+        f"- Filler words: {filler_count} ({fillers_str})\n"
+        f"- Hesitations / stammers: {stammer_events} instances\n"
+        f"- Gaps of silence: {long_pauses} pauses{target_info}\n\n"
+        "Provide a small, concise evaluation with 2-3 short, highly actionable suggestions for improvement. "
+        "Format as 1 short assessment sentence followed by 2-3 concise bullet points. "
+        "Keep your response under 60-75 words total, direct and encouraging. "
+        "Do not include any headers, greeting, intro, outro, or quotes."
+    )
+
+    # 1. Primary: Google Gemini API (gemini-2.5-flash / gemini-1.5-flash)
+    if gemini_key:
+        for model in ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash"]:
+            try:
+                logger.info(f"Evaluating speech results using Google Gemini API ({model})...")
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    res = await client.post(
+                        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                        headers={
+                            "x-goog-api-key": gemini_key,
+                            "Content-Type": "application/json"
+                        },
+                        json={"contents": [{"parts": [{"text": eval_prompt}]}]}
+                    )
+                    if res.status_code == 200:
+                        candidates = res.json().get("candidates", [])
+                        if candidates:
+                            text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
+                            if text:
+                                if text.startswith('"') and text.endswith('"'):
+                                    text = text[1:-1]
+                                logger.info(f"Successfully received Gemini evaluation results ({model}).")
+                                return text, "Google Gemini"
+                    else:
+                        logger.warning(f"Gemini API ({model}) returned status {res.status_code}: {res.text[:120]}")
+            except Exception as e:
+                logger.warning(f"Error querying Gemini API ({model}): {e}")
+
+    # 2. Fallback: Groq Cloud
+    if groq_key:
         try:
-            logger.info("Querying xAI API...")
+            logger.info("Evaluating speech results with Groq fallback...")
             async with httpx.AsyncClient(timeout=15.0) as client:
                 res = await client.post(
-                    "https://api.x.ai/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {xai_key}",
-                        "Content-Type": "application/json"
-                    },
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
                     json={
-                        "model": "grok-beta",
+                        "model": "openai/gpt-oss-120b",
                         "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": prompt}
+                            {"role": "system", "content": "You are a professional speech pathologist. Provide small, concise evaluation and suggestions."},
+                            {"role": "user", "content": eval_prompt}
                         ],
-                        "temperature": 0.7
+                        "temperature": 0.5
                     }
                 )
                 if res.status_code == 200:
-                    data = res.json()
-                    text = data["choices"][0]["message"]["content"].strip()
+                    text = res.json()["choices"][0]["message"]["content"].strip()
                     if text.startswith('"') and text.endswith('"'):
                         text = text[1:-1]
-                    logger.info("Successfully received response from xAI.")
-                    return text, "xAI Grok"
+                    return text, "Groq Cloud"
         except Exception as e:
-            logger.warning(f"Error querying xAI API: {e}")
+            logger.warning(f"Error in Groq evaluation fallback: {e}")
 
-    return None, None
+    # 3. Rule-based small and concise fallback suggestions
+    suggestions = []
+    if wpm < 110 and wpm > 0:
+        suggestions.append("• Aim for a slightly faster, more rhythmic pace (130-150 WPM).")
+    elif wpm > 155:
+        suggestions.append("• Slow your pace slightly to give articulation space to breathe.")
+    else:
+        suggestions.append("• Maintain your steady, natural speaking pace.")
+
+    if filler_count > 2:
+        suggestions.append(f"• Replace filler words like '{filler_words_found[0] if filler_words_found else 'um'}' with brief silent pauses.")
+    if long_pauses > 2:
+        suggestions.append("• Outline your ideas before speaking to reduce hesitation gaps.")
+    elif stammer_events > 1:
+        suggestions.append("• Elongate initial vowels to ease through articulatory blocks.")
+
+    if len(suggestions) < 3:
+        suggestions.append("• Practice diaphragmatic breathing before starting each sentence.")
+
+    fallback_eval = (
+        f"Your pace of {round(wpm, 1)} WPM demonstrates steady communication. "
+        "Suggestions:\n" + "\n".join(suggestions[:3])
+    )
+    return fallback_eval, "Local Evaluation"
+
+
+async def query_llm(
+    prompt: str,
+    system_prompt: str = "You are a professional speech therapy assistant.",
+    prefer: str = "auto"
+) -> tuple[Optional[str], Optional[str]]:
+    """
+    General query LLM helper supporting 'groq', 'gemini', or 'auto' provider preference.
+    """
+    if prefer == "groq":
+        return await generate_custom_text_with_groq(prompt, system_prompt)
+    elif prefer == "gemini":
+        gemini_key = os.getenv("GEMINI_API_KEY")
+        if gemini_key:
+            for model in ["gemini-2.5-flash", "gemini-1.5-flash"]:
+                try:
+                    async with httpx.AsyncClient(timeout=15.0) as client:
+                        res = await client.post(
+                            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                            headers={"x-goog-api-key": gemini_key, "Content-Type": "application/json"},
+                            json={"contents": [{"parts": [{"text": f"{system_prompt}\n\n{prompt}"}]}]}
+                        )
+                        if res.status_code == 200:
+                            candidates = res.json().get("candidates", [])
+                            if candidates:
+                                text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
+                                return text, "Google Gemini"
+                except Exception as e:
+                    logger.warning(f"Error querying Gemini: {e}")
+        return await generate_custom_text_with_groq(prompt, system_prompt)
+    else:
+        # Default auto order
+        return await generate_custom_text_with_groq(prompt, system_prompt)
+
 
 @app.get("/practice/generate")
 async def generate_practice_text(
     topic: Optional[str] = "General Communication",
     length: Optional[str] = "paragraph",
-    exercise_id: Optional[str] = "none"
+    exercise_id: Optional[str] = "none",
+    level: Optional[str] = "medium",
+    difficulty: Optional[str] = None
 ):
     if db is None:
         raise HTTPException(status_code=500, detail="Database not available")
     
+    level_val = (difficulty or level or "medium").lower()
+    if level_val == "easy":
+        level_instruction = (
+            "The English difficulty level must be EASY (beginner friendly): use simple vocabulary, short and straightforward sentences, "
+            "and familiar everyday words suitable for basic language learners."
+        )
+    elif level_val == "difficult":
+        level_instruction = (
+            "The English difficulty level must be DIFFICULT (advanced/mastery): use sophisticated and challenging vocabulary, complex sentence structures, "
+            "diverse linguistic phrasing, and rich rhetorical expressions suitable for advanced fluent speakers."
+        )
+    else:
+        level_val = "medium"
+        level_instruction = (
+            "The English difficulty level must be MEDIUM (intermediate): use standard conversational and professional vocabulary "
+            "with balanced sentence complexity and natural phrasing."
+        )
+
     focus_guidelines = ""
     if exercise_id and exercise_id != "none":
         try:
@@ -734,40 +988,78 @@ async def generate_practice_text(
         length_desc = "one extended paragraph or two of about 100-150 words"
 
     prompt = (
-        f"You are a helpful speech therapist assistant. Generate a speech practice text "
-        f"about the topic '{topic}'. The text must be exactly {length_desc}.{focus_guidelines} "
+        f"You are a helpful speech therapist assistant. Generate a customized speech practice text "
+        f"about the topic '{topic}'. The text must be exactly {length_desc}. {level_instruction}{focus_guidelines} "
         f"Ensure the text is natural, engaging, and contains vocabulary relevant to the topic. "
         f"Do not include any intro, outro, titles, quotes, markdown formatting, or metadata. Output ONLY the raw text to be read aloud."
     )
 
-    generated_text, source_name = await query_llm(
+    # Use Groq API Key to generate customized text
+    generated_text, source_name = await generate_custom_text_with_groq(
         prompt=prompt,
         system_prompt="You are a professional speech therapist assistant. Output raw practice text only."
     )
     if generated_text:
-        return {"text": generated_text, "source": source_name}
+        return {"text": generated_text, "source": source_name, "level": level_val}
 
     logger.info("Using local template generator fallback.")
     fallback_templates = {
-        "sentence": [
-            "We should discuss the importance of communication in space exploration.",
-            "Cooking requires patience, fresh ingredients, and a good understanding of recipes.",
-            "Technology continues to evolve rapidly, transforming the way we connect with others.",
-            "Professional success is built on active listening and concise speech articulation.",
-            "Learning a new language is a beautiful journey that enriches the human mind."
-        ],
-        "paragraph": [
-            "Speaking in front of an audience can be intimidating at first, but with steady pacing and deliberate breaths, anyone can deliver a powerful message. It is essential to focus on articulation and maintain a conversational speed of around one hundred and thirty words per minute, avoiding filler words.",
-            "The culinary arts offer a wonderful blend of creativity and science. Whether you are baking bread or slow-cooking a savory soup, each step requires attention to detail. Sharing a warm meal with family and friends is one of the oldest and most universal ways of expressing care.",
-            "Human exploration of outer space has inspired generations of scientists, writers, and dreamers. Sending satellites into orbit and landing rovers on Mars helps us answer fundamental questions about our solar system. The journey to the stars is a testament to human curiosity and innovation."
-        ],
-        "long_paragraph": [
-            "To speak clearly and confidently, one must practice the art of breath control and deliberate pacing. A common mistake is rushing through sentences, which leads to slurred consonants and frequent stammering. By breaking your speech into logical chunks and pausing silently for a brief moment between key ideas, you give the listener time to absorb your thoughts. Daily drills focusing on challenging tongue-twisters and steady reading exercises will significantly boost your overall articulation, clarity, and voice resonance over time.",
-            "Modern digital technology plays an indispensable role in shaping our daily routines, from remote work platforms to automated smart home devices. While these advancements offer incredible convenience and boost global productivity, they also challenge us to find a healthy balance between online interactions and face-to-face communication. As artificial intelligence and machine learning models continue to mature, the key focus remains on leveraging technology ethically to solve real-world problems and improve lives."
-        ]
+        "easy": {
+            "sentence": [
+                "Good communication with our friends helps us share happy stories.",
+                "Cooking healthy food every day gives our bodies energy and strength.",
+                "New technology helps people talk to each other across the world.",
+                "Speaking clearly and slowly helps everyone understand your ideas.",
+                "Learning new words every day is fun and exciting."
+            ],
+            "paragraph": [
+                "Speaking to other people can be easy and fun when you relax. Take a slow breath before you start speaking. Keep your words clear and say them at a calm pace. When you practice every day, speaking becomes much easier and you will feel more confident.",
+                "Making food at home is a great way to learn new skills. You can wash fresh vegetables, cut them carefully, and put them in a warm pot. When the food is ready, eating dinner with your family makes everyone feel happy.",
+                "Looking up at the night sky makes people think about the stars and planets. Scientists build rockets to visit space and learn new things. Discovering what is far away helps us understand our own home on Earth."
+            ],
+            "long_paragraph": [
+                "When you want to speak clearly, the best step is to stay calm and take deep breaths. Many people speak too fast when they feel nervous, and this makes it hard for listeners to follow. By pausing quietly between sentences, you give yourself time to think of the next word. Reading stories out loud every morning helps you practice saying each word smoothly and building lasting confidence."
+            ]
+        },
+        "medium": {
+            "sentence": [
+                "We should discuss the importance of communication in space exploration.",
+                "Cooking requires patience, fresh ingredients, and a good understanding of recipes.",
+                "Technology continues to evolve rapidly, transforming the way we connect with others.",
+                "Professional success is built on active listening and concise speech articulation.",
+                "Learning a new language is a beautiful journey that enriches the human mind."
+            ],
+            "paragraph": [
+                "Speaking in front of an audience can be intimidating at first, but with steady pacing and deliberate breaths, anyone can deliver a powerful message. It is essential to focus on articulation and maintain a conversational speed of around one hundred and thirty words per minute, avoiding filler words.",
+                "The culinary arts offer a wonderful blend of creativity and science. Whether you are baking bread or slow-cooking a savory soup, each step requires attention to detail. Sharing a warm meal with family and friends is one of the oldest and most universal ways of expressing care.",
+                "Human exploration of outer space has inspired generations of scientists, writers, and dreamers. Sending satellites into orbit and landing rovers on Mars helps us answer fundamental questions about our solar system. The journey to the stars is a testament to human curiosity and innovation."
+            ],
+            "long_paragraph": [
+                "To speak clearly and confidently, one must practice the art of breath control and deliberate pacing. A common mistake is rushing through sentences, which leads to slurred consonants and frequent stammering. By breaking your speech into logical chunks and pausing silently for a brief moment between key ideas, you give the listener time to absorb your thoughts. Daily drills focusing on challenging tongue-twisters and steady reading exercises will significantly boost your overall articulation, clarity, and voice resonance over time.",
+                "Modern digital technology plays an indispensable role in shaping our daily routines, from remote work platforms to automated smart home devices. While these advancements offer incredible convenience and boost global productivity, they also challenge us to find a healthy balance between online interactions and face-to-face communication. As artificial intelligence and machine learning models continue to mature, the key focus remains on leveraging technology ethically to solve real-world problems and improve lives."
+            ]
+        },
+        "difficult": {
+            "sentence": [
+                "Articulating nuanced geopolitical discourse necessitates unparalleled linguistic dexterity and rhetorical finesse.",
+                "Gastronomic sophistication demands meticulous harmonization of delicate herbs, quintessential seasoning, and culinary precision.",
+                "Technological paradigm shifts persistently revolutionize socio-economic infrastructures and multilateral paradigms.",
+                "Cultivating acoustic resonance and impeccable phonetic enunciation facilitates persuasive eloquence in executive leadership.",
+                "Cognitive linguistics illuminates how syntactic intricacies fundamentally sculpt human consciousness and cultural perception."
+            ],
+            "paragraph": [
+                "Oratorical prowess transcends mere verbal competence, demanding scrupulous modulation of intonation, cadenced respiration, and authoritative presence. When navigating multifaceted controversies, seasoned rhetoricians deliberately harness strategic pauses, systematically dismantling cognitive dissonance while enunciating intricate syllables with consummate precision and unyielding composure.",
+                "Gastronomic alchemy represents an exquisite confluence of empirical chemistry and aesthetic craftsmanship. Cultivating an epicurean palate requires deciphering subtleties of caramelization, enzymatic tenderization, and harmonic umami profiles, transforming rudimentary sustenance into transcendent sensory spectacles that commemorate culinary heritage.",
+                "Astrophysical exploration constitutes humanity's ultimate endeavor to decipher celestial mechanics and cosmological mysteries. Scrutinizing planetary atmospheres and gravitational anomalies broadens scientific paradigms, challenging existential presumptions while underscoring our infinitesimal footprint within the primordial expanse of spacetime."
+            ],
+            "long_paragraph": [
+                "Mastering sophisticated verbal articulation demands rigorous discipline in vocal acoustics, breath management, and diaphragmatic projection. Impetuous speakers frequently succumb to phonetic degradation, obscuring polysyllabic transitions and diluting rhetoric through repetitive fillers. By orchestrating strategic pauses and deliberate cadence, the speaker commands authority and imbues prose with gravitas, ensuring complex philosophical deliberations are received with clarity, elegance, and persuasive resonance."
+            ]
+        }
     }
 
-    selected_list = fallback_templates.get(length, fallback_templates["sentence"])
+    tier_dict = fallback_templates.get(level_val, fallback_templates["medium"])
+    selected_list = tier_dict.get(length, tier_dict.get("sentence", []))
     
     matched = [t for t in selected_list if topic.lower() in t.lower()]
     import random
@@ -776,7 +1068,7 @@ async def generate_practice_text(
     if exercise_id == "articulation_drill":
         text += " She sells seashells by the seashore, and the seashells she sells are surely seashells."
 
-    return {"text": text, "source": "local_fallback"}
+    return {"text": text, "source": "local_fallback", "level": level_val}
 
 @app.get("/exercises")
 def get_exercises():
@@ -1046,14 +1338,19 @@ async def analyze_speech(
         wpm = round(total_word_count / duration_min, 1) if duration_min > 0 else 0.0
 
         # 4. Feature Extraction: Filler Words (Lexical + Acoustic Filled Pauses)
-        filler_count, filler_words_found = detect_fillers(
+        filler_count, filler_words_found, filler_details = detect_fillers(
             transcript=transcript,
             wav_path=temp_wav_path,
-            words_list=words_list
+            words_list=words_list,
+            return_details=True
         )
 
         # 5. Feature Extraction: Stammering
-        stammer_events = detect_stammering(transcript)
+        stammer_events, stammer_details = detect_stammering(
+            transcript=transcript,
+            words_list=words_list,
+            return_details=True
+        )
 
         # 6. Feature Extraction: Long Pauses
         long_pauses = 0
@@ -1135,30 +1432,17 @@ async def analyze_speech(
             feedback.append("Excellent fluency! Your pace, pause usage, and articulation are in the optimal range.")
             recommended_exercises.append("advanced_impromptu_speaking")
 
-        # AI Speech Pathologist Personalized Evaluation
-        prompt = (
-            "You are an expert speech-language pathologist. Review this speech session statistics:\n"
-            f"Spoken text: \"{transcript}\"\n"
-            f"Speed: {wpm} WPM\n"
-            f"Filler words used: {filler_count} ({', '.join(filler_words_found) if filler_words_found else 'none'})\n"
-            f"Hesitations/stammers: {stammer_events} instances\n"
-            f"Gaps of silence: {long_pauses} pauses\n\n"
-            "Write a warm, professional, encouraging, and highly specific 3-sentence evaluation report. "
-            "Highlight one key strength and one actionable speaking tip based on their transcript and pace. "
-            "Address the user directly. Do not include greetings, introductions, headings, or quotes."
+        # Gemini Evaluation: Small, concise evaluation and actionable suggestions
+        ai_pathologist_feedback, source_name = await evaluate_results_with_gemini(
+            transcript=transcript,
+            wpm=wpm,
+            filler_count=filler_count,
+            filler_words_found=filler_words_found,
+            stammer_events=stammer_events,
+            long_pauses=long_pauses,
+            target_sentence=target_sentence,
+            wer=wer_val
         )
-        ai_pathologist_feedback, source_name = await query_llm(
-            prompt=prompt,
-            system_prompt="You are a professional speech pathologist writer. Write exactly three sentences of encouraging feedback directly addressing the speaker."
-        )
-
-        if not ai_pathologist_feedback:
-            # Fallback evaluation
-            ai_pathologist_feedback = (
-                f"Your speech rate of {wpm} WPM demonstrates steady pacing. "
-                f"To build confidence, focus on reducing filler words and elongating key vowel sounds. "
-                f"Continue practicing structured exercises to master control over silent pauses."
-            )
 
         streak_count = update_user_streak(user_id)
 
@@ -1170,7 +1454,9 @@ async def analyze_speech(
             "wpm": float(wpm),
             "filler_count": int(filler_count),
             "filler_words_found": filler_words_found,
+            "filler_details": filler_details,
             "stammer_events": int(stammer_events),
+            "stammer_details": stammer_details,
             "long_pauses": int(long_pauses),
             "pause_details": pause_details,
             "sub_scores": {
@@ -1219,14 +1505,50 @@ async def analyze_speech(
                     logger.warning(f"Failed to delete temp file '{path}': {e}")
 
 
+def normalize_tts_text(text: str) -> str:
+    """Insert spaces into compact strings before sending them to TTS.
+
+    Examples:
+      'Thequickbrownfox...' -> 'The quick brown fox...'
+      'helloWorld' -> 'hello World'
+    """
+    if not text:
+        return text
+
+    normalized = text.strip().replace('\u2019', "'")
+    normalized = re.sub(r'\s+', ' ', normalized)
+    normalized = re.sub(r'([a-z])([A-Z])', r'\1 \2', normalized)
+    normalized = re.sub(r'([a-zA-Z])([0-9])', r'\1 \2', normalized)
+    normalized = re.sub(r'([0-9])([a-zA-Z])', r'\1 \2', normalized)
+    normalized = re.sub(r'([,.!?;:])(?=[A-Za-z])', r'\1 ', normalized)
+    normalized = re.sub(r'\s+', ' ', normalized).strip()
+    return normalized
+
+
+async def collect_tts_audio(stream_iterable):
+    """Collect the complete MP3 payload before returning it to the browser.
+
+    edge-tts streams audio in chunks. Returning those chunks as a live stream can
+    cause browsers to start decoding before the initial MP3 frame set is complete,
+    which often shows up as the first 1-2 seconds being skipped or missing.
+    """
+    chunks = []
+    async for msg in stream_iterable:
+        if msg.get('type') == 'audio' and msg.get('data'):
+            chunks.append(msg['data'])
+    return b''.join(chunks)
+
+
 @app.get('/tts/generate')
 async def generate_tts(text: Optional[str] = None, voice: Optional[str] = 'en-US-AriaNeural'):
-    """Synthesize text to speech using edge-tts and stream as MP3.
+    """Synthesize text to speech using edge-tts and return a complete MP3 blob.
 
     Example: GET /tts/generate?text=Hello+world
     """
     if not text:
         raise HTTPException(status_code=400, detail='Missing text parameter')
+
+    text = normalize_tts_text(text)
 
     try:
         import edge_tts
@@ -1234,14 +1556,14 @@ async def generate_tts(text: Optional[str] = None, voice: Optional[str] = 'en-US
         logger.error(f'edge-tts is not available: {e}')
         raise HTTPException(status_code=500, detail='TTS engine not available on server')
 
-    async def audio_stream():
+    try:
         communicate = edge_tts.Communicate(text, voice=voice)
-        try:
-            async for msg in communicate.stream():
-                if msg.get('type') == 'audio':
-                    # msg['data'] contains raw bytes
-                    yield msg.get('data')
-        except Exception as e:
-            logger.error(f'Error during TTS streaming: {e}')
-
-    return StreamingResponse(audio_stream(), media_type='audio/mpeg')
+        audio_bytes = await collect_tts_audio(communicate.stream())
+        if not audio_bytes:
+            raise HTTPException(status_code=500, detail='No audio data was generated')
+        return Response(content=audio_bytes, media_type='audio/mpeg')
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f'Error during TTS generation: {e}')
+        raise HTTPException(status_code=500, detail='Failed to generate TTS audio')

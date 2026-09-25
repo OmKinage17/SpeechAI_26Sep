@@ -27,6 +27,21 @@ interface PauseDetail {
   duration: number;
 }
 
+interface FillerDetail {
+  word: string;
+  start: number;
+  end: number;
+  duration: number;
+}
+
+interface StammerDetail {
+  text: string;
+  type: string;
+  start: number;
+  end: number;
+  duration: number;
+}
+
 interface AnalysisResult {
   transcript: string;
   duration_sec: number;
@@ -34,7 +49,9 @@ interface AnalysisResult {
   wpm: number;
   filler_count: number;
   filler_words_found: string[];
+  filler_details?: FillerDetail[];
   stammer_events: number;
+  stammer_details?: StammerDetail[];
   long_pauses: number;
   pause_details?: PauseDetail[];
   sub_scores: {
@@ -77,7 +94,9 @@ interface SessionRecord {
   wpm?: number;
   filler_count?: number;
   filler_words_found?: string[];
+  filler_details?: FillerDetail[];
   stammer_events?: number;
+  stammer_details?: StammerDetail[];
   long_pauses?: number;
   duration_sec?: number;
   pause_details?: PauseDetail[];
@@ -414,11 +433,14 @@ function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [isAudioPlaying, setIsAudioPlaying] = useState(false);
+  const [isAudioLoading, setIsAudioLoading] = useState(false);
   const [currentAudioType, setCurrentAudioType] = useState<'reference' | 'recording' | null>(null);
   const audioBlobRef = useRef<Blob | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const speechUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const ttsAbortControllerRef = useRef<AbortController | null>(null);
+  const activeAudioRequestIdRef = useRef<number>(0);
   
   // Module 1 specific
   const [targetSentence, setTargetSentence] = useState(SAMPLE_SENTENCES[0]);
@@ -438,20 +460,34 @@ function App() {
   const [historyTab, setHistoryTab] = useState<'practice' | 'analysis' | 'exercise'>('practice');
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
 
-  // Grok AI practice text generator states
+  // Groq AI practice text generator states
   const [aiTopic, setAiTopic] = useState('General Communication');
   const [aiLength, setAiLength] = useState('paragraph');
-  const [aiFocusExercise, setAiFocusExercise] = useState('none');
+  const [aiFocusExercise] = useState('none');
+  const [aiEnglishLevel, setAiEnglishLevel] = useState<'easy' | 'medium' | 'difficult'>('medium');
   const [isGenerating, setIsGenerating] = useState(false);
   const [fluencyTargetText, setFluencyTargetText] = useState('');
-  const [configTabM1, setConfigTabM1] = useState<'presets' | 'custom' | 'grok'>('presets');
-  const [configTabM2, setConfigTabM2] = useState<'prompt' | 'grok'>('prompt');
+  const [configTabM1, setConfigTabM1] = useState<'presets' | 'custom' | 'groq'>('presets');
+  const [configTabM2, setConfigTabM2] = useState<'prompt' | 'groq'>('prompt');
 
   // Exercise detail modal/instructions view state
   const [activeExerciseDetail, setActiveExerciseDetail] = useState<Exercise | null>(null);
   const [exerciseTargetText, setExerciseTargetText] = useState('');
-  const [configTabExM1, setConfigTabExM1] = useState<'presets' | 'custom' | 'grok'>('presets');
+  const [configTabExM1, setConfigTabExM1] = useState<'presets' | 'custom' | 'groq'>('presets');
   const [exerciseDifficulty, setExerciseDifficulty] = useState<'beginner' | 'intermediate' | 'advanced'>('beginner');
+
+  const normalizeTtsText = (text: string) => {
+    if (!text) return text;
+
+    let normalized = text.trim();
+    normalized = normalized.replace(/\s+/g, ' ');
+    normalized = normalized.replace(/([a-z])([A-Z])/g, '$1 $2');
+    normalized = normalized.replace(/([a-z])([0-9])/gi, '$1 $2');
+    normalized = normalized.replace(/([0-9])([A-Za-z])/g, '$1 $2');
+    normalized = normalized.replace(/([,.!?;:])(?=[A-Za-z])/g, '$1 ');
+    normalized = normalized.replace(/\s+/g, ' ').trim();
+    return normalized;
+  };
 
   const startExerciseDrill = (ex: Exercise) => {
     setActiveExerciseDetail(ex);
@@ -527,6 +563,10 @@ function App() {
       };
       recognitionRef.current = rec;
     }
+
+    return () => {
+      stopPlayback();
+    };
   }, []);
 
   // Fetch reports when user shifts (logged in vs anonymous)
@@ -590,7 +630,7 @@ function App() {
   const handleGenerateText = async () => {
     setIsGenerating(true);
     try {
-      const url = `http://127.0.0.1:8000/practice/generate?topic=${encodeURIComponent(aiTopic)}&length=${aiLength}&exercise_id=${aiFocusExercise}`;
+      const url = `http://127.0.0.1:8000/practice/generate?topic=${encodeURIComponent(aiTopic)}&length=${aiLength}&level=${aiEnglishLevel}&exercise_id=${aiFocusExercise}`;
       const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
@@ -601,7 +641,7 @@ function App() {
           setFluencyTargetText(data.text);
           setAnalysisResult(null);
         }
-        alert(`Practice text generated successfully using ${data.source}!`);
+        alert(`Practice text (${aiEnglishLevel.toUpperCase()} English level) generated successfully using ${data.source}!`);
       } else {
         throw new Error("Failed to generate text");
       }
@@ -692,6 +732,7 @@ function App() {
   };
 
   const startRecording = async () => {
+    stopPlayback();
     try {
       setLiveTranscript('');
       setAudioUrl(null);
@@ -891,7 +932,7 @@ function App() {
         <div className="tts-controls" style={{ marginTop: '16px', display: 'flex', gap: '10px' }}>
           <button 
             className="tts-btn" 
-            onClick={() => isAudioPlaying && currentAudioType === 'reference' ? stopPlayback() : speakText(targetSentence)}
+            onClick={() => (isAudioPlaying || isAudioLoading) && currentAudioType === 'reference' ? stopPlayback() : speakText(targetSentence)}
             style={{
               display: 'inline-flex',
               alignItems: 'center',
@@ -907,12 +948,12 @@ function App() {
               transition: 'var(--transition-fast)'
             }}
           >
-            {isAudioPlaying && currentAudioType === 'reference' ? (
+            {(isAudioPlaying || isAudioLoading) && currentAudioType === 'reference' ? (
               <Square size={14} style={{ color: 'var(--error)' }} />
             ) : (
               <Volume2 size={14} style={{ color: 'var(--primary)' }} />
             )}
-            {isAudioPlaying && currentAudioType === 'reference' ? 'Stop' : 'Listen Reference'}
+            {(isAudioPlaying || isAudioLoading) && currentAudioType === 'reference' ? 'Stop' : 'Listen Reference'}
           </button>
           {audioUrl && (
             <button 
@@ -933,12 +974,12 @@ function App() {
                 transition: 'var(--transition-fast)'
               }}
             >
-              {isAudioPlaying && currentAudioType === 'recording' ? (
+              {(isAudioPlaying || isAudioLoading) && currentAudioType === 'recording' ? (
                 <Square size={14} style={{ color: 'var(--error)' }} />
               ) : (
                 <Play size={14} style={{ color: 'var(--success)' }} />
               )}
-              {isAudioPlaying && currentAudioType === 'recording' ? 'Stop' : 'Play My Recording'}
+              {(isAudioPlaying || isAudioLoading) && currentAudioType === 'recording' ? 'Stop' : 'Play My Recording'}
             </button>
           )}
         </div>
@@ -994,8 +1035,24 @@ function App() {
 
   // ---------- Edge-like TTS helpers (browser SpeechSynthesis, prefers Microsoft/Edge voices when available) ----------
   const stopPlayback = () => {
+    // Invalidate any active or in-flight audio requests
+    activeAudioRequestIdRef.current += 1;
+
+    // Abort in-flight network requests
+    if (ttsAbortControllerRef.current) {
+      try {
+        ttsAbortControllerRef.current.abort();
+      } catch (e) {
+        console.warn('Error aborting TTS fetch:', e);
+      }
+      ttsAbortControllerRef.current = null;
+    }
+
+    // Stop and cleanup active HTMLAudioElement
     if (audioRef.current) {
       try {
+        audioRef.current.onended = null;
+        audioRef.current.onerror = null;
         audioRef.current.pause();
         audioRef.current.currentTime = 0;
         audioRef.current.src = '';
@@ -1005,7 +1062,8 @@ function App() {
       audioRef.current = null;
     }
 
-    if ((window as any).speechSynthesis) {
+    // Cancel browser SpeechSynthesis
+    if (typeof window !== 'undefined' && (window as any).speechSynthesis) {
       try {
         (window as any).speechSynthesis.cancel();
       } catch (e) {
@@ -1020,98 +1078,161 @@ function App() {
     }
 
     setIsAudioPlaying(false);
+    setIsAudioLoading(false);
     setCurrentAudioType(null);
   };
 
   const speakText = async (text: string, rate = 0.95) => {
     if (!text || typeof window === 'undefined') return;
+
+    const normalizedText = normalizeTtsText(text);
+    if (!normalizedText) return;
+
     stopPlayback();
-    // Try server-side TTS first
+
+    const thisRequestId = ++activeAudioRequestIdRef.current;
+    const abortController = new AbortController();
+    ttsAbortControllerRef.current = abortController;
+
+    setIsAudioLoading(true);
+    setCurrentAudioType('reference');
+
     try {
-      const url = `http://127.0.0.1:8000/tts/generate?text=${encodeURIComponent(text)}`;
-      const res = await fetch(url);
-      if (res.ok) {
-        const buf = await res.arrayBuffer();
-        const blob = new Blob([buf], { type: 'audio/mpeg' });
-        const objectUrl = URL.createObjectURL(blob);
-        const a = new Audio(objectUrl);
-        audioRef.current = a;
+      if ((window as any).speechSynthesis) {
+        const utter = new SpeechSynthesisUtterance(normalizedText);
+        utter.rate = rate;
+        const voices = (window as any).speechSynthesis.getVoices() || [];
+        const preferred = voices.find((v: any) => /Microsoft|Zira|Aria|Davis|Guy|Hazel|Eva|Gwyneth/i.test(v.name));
+        if (preferred) utter.voice = preferred;
+
+        utter.onend = () => {
+          if (activeAudioRequestIdRef.current === thisRequestId) {
+            setIsAudioPlaying(false);
+            setIsAudioLoading(false);
+            setCurrentAudioType(null);
+            speechUtteranceRef.current = null;
+          }
+        };
+
+        utter.onerror = () => {
+          if (activeAudioRequestIdRef.current === thisRequestId) {
+            setIsAudioPlaying(false);
+            setIsAudioLoading(false);
+            setCurrentAudioType(null);
+            speechUtteranceRef.current = null;
+          }
+        };
+
+        speechUtteranceRef.current = utter;
+        (window as any).speechSynthesis.cancel();
+        (window as any).speechSynthesis.speak(utter);
+        setIsAudioLoading(false);
         setIsAudioPlaying(true);
         setCurrentAudioType('reference');
-        a.onended = () => {
-          if (audioRef.current === a) {
-            setIsAudioPlaying(false);
-            setCurrentAudioType(null);
-            audioRef.current = null;
-          }
-        };
-        a.onerror = () => {
-          if (audioRef.current === a) {
-            setIsAudioPlaying(false);
-            setCurrentAudioType(null);
-            audioRef.current = null;
-          }
-        };
-        await a.play();
         return;
       }
     } catch (e) {
-      console.warn('Server TTS failed, falling back to browser TTS:', e);
+      console.warn('Browser TTS unavailable or failed; falling back to server audio:', e);
     }
 
-    // Fallback: browser SpeechSynthesis (prefers Edge/Microsoft voices if present)
+    if (thisRequestId !== activeAudioRequestIdRef.current) return;
+
     try {
-      if (!(window as any).speechSynthesis) return;
-      const utter = new SpeechSynthesisUtterance(text);
-      utter.rate = rate;
-      const voices = (window as any).speechSynthesis.getVoices() || [];
-      const preferred = voices.find((v: any) => /Microsoft|Zira|Aria|Davis|Guy|Hazel|Eva|Gwyneth/i.test(v.name));
-      if (preferred) utter.voice = preferred;
-      utter.onend = () => {
-        if (speechUtteranceRef.current === utter) {
-          setIsAudioPlaying(false);
-          setCurrentAudioType(null);
-          speechUtteranceRef.current = null;
-        }
-      };
-      utter.onerror = () => {
-        if (speechUtteranceRef.current === utter) {
-          setIsAudioPlaying(false);
-          setCurrentAudioType(null);
-          speechUtteranceRef.current = null;
-        }
-      };
-      speechUtteranceRef.current = utter;
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.speak(utter);
+      const url = `http://127.0.0.1:8000/tts/generate?text=${encodeURIComponent(normalizedText)}`;
+      const res = await fetch(url, { signal: abortController.signal });
+
+      if (thisRequestId !== activeAudioRequestIdRef.current) {
+        return;
+      }
+
+      if (!res.ok) {
+        throw new Error(`TTS request failed: ${res.status}`);
+      }
+
+      const buf = await res.arrayBuffer();
+      if (thisRequestId !== activeAudioRequestIdRef.current) {
+        return;
+      }
+
+      const blob = new Blob([buf], { type: 'audio/mpeg' });
+      const objectUrl = URL.createObjectURL(blob);
+      const a = new Audio(objectUrl);
+      a.preload = 'auto';
+      a.load();
+
+      if (thisRequestId !== activeAudioRequestIdRef.current) {
+        URL.revokeObjectURL(objectUrl);
+        return;
+      }
+
+      if (audioRef.current) {
+        try {
+          audioRef.current.onended = null;
+          audioRef.current.onerror = null;
+          audioRef.current.pause();
+          audioRef.current.src = '';
+        } catch (_) {}
+      }
+
+      audioRef.current = a;
+      setIsAudioLoading(false);
       setIsAudioPlaying(true);
       setCurrentAudioType('reference');
-    } catch (e) {
-      console.error('Browser TTS error:', e);
+
+      a.onended = () => {
+        URL.revokeObjectURL(objectUrl);
+        if (activeAudioRequestIdRef.current === thisRequestId) {
+          setIsAudioPlaying(false);
+          setIsAudioLoading(false);
+          setCurrentAudioType(null);
+          audioRef.current = null;
+        }
+      };
+
+      a.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        if (activeAudioRequestIdRef.current === thisRequestId) {
+          setIsAudioPlaying(false);
+          setIsAudioLoading(false);
+          setCurrentAudioType(null);
+          audioRef.current = null;
+        }
+      };
+
+      await a.play();
+    } catch (e: any) {
+      if (e.name === 'AbortError' || thisRequestId !== activeAudioRequestIdRef.current) {
+        return;
+      }
+      console.warn('Server TTS failed:', e);
+      setIsAudioLoading(false);
+      setIsAudioPlaying(false);
+      setCurrentAudioType(null);
     }
   };
 
   const playUserRecording = () => {
     if (!audioUrl) return;
-    if (isAudioPlaying && currentAudioType === 'recording') {
+    if ((isAudioPlaying || isAudioLoading) && currentAudioType === 'recording') {
       stopPlayback();
       return;
     }
     stopPlayback();
+    const thisRequestId = ++activeAudioRequestIdRef.current;
     try {
       const a = new Audio(audioUrl);
       audioRef.current = a;
       setIsAudioPlaying(true);
       setCurrentAudioType('recording');
       a.onended = () => {
-        if (audioRef.current === a) {
+        if (activeAudioRequestIdRef.current === thisRequestId) {
           setIsAudioPlaying(false);
           setCurrentAudioType(null);
           audioRef.current = null;
         }
       };
       a.onerror = () => {
-        if (audioRef.current === a) {
+        if (activeAudioRequestIdRef.current === thisRequestId) {
           setIsAudioPlaying(false);
           setCurrentAudioType(null);
           audioRef.current = null;
@@ -1120,6 +1241,8 @@ function App() {
       a.play().catch((e) => console.error('Playback failed:', e));
     } catch (e) {
       console.error('Error playing user recording:', e);
+      setIsAudioPlaying(false);
+      setCurrentAudioType(null);
     }
   };
 
@@ -1177,33 +1300,97 @@ function App() {
 
   const visibleHistory = filteredHistory;
 
+  // Reset all ephemeral practice, analysis, recording, and transcript activity data
+  const resetActivityState = (targetTab?: 'dashboard' | 'practice' | 'fluency' | 'exercises' | 'video', keepExerciseDetail = false) => {
+    // 1. Immediately stop any TTS or recorded audio playback
+    stopPlayback();
+
+    // 2. Stop microphone recording cleanly
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try {
+        mediaRecorderRef.current.stop();
+        mediaRecorderRef.current.stream?.getTracks().forEach(track => track.stop());
+      } catch (e) {
+        console.error("Error stopping recorder on reset:", e);
+      }
+    }
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch (e) {}
+    }
+    setIsRecording(false);
+
+    // 3. Clear audio and transcript state
+    setAudioUrl(null);
+    audioBlobRef.current = null;
+    setLiveTranscript('');
+
+    // 4. Reset status
+    setStatus('idle');
+    setStatusMessage('Ready to record');
+
+    // 5. Clear module evaluation results
+    setPracticeResult(null);
+    setAnalysisResult(null);
+
+    // 6. Reset target passages and prompts to default fresh state
+    setTargetSentence(SAMPLE_SENTENCES[0]);
+    setConfigTabM1('presets');
+    setFluencyTargetText('');
+    setPromptIndex(0);
+    setConfigTabM2('prompt');
+
+    // 7. Clear exercise drill if leaving exercises
+    if (!keepExerciseDetail && targetTab !== 'exercises') {
+      setActiveExerciseDetail(null);
+      setExerciseTargetText('');
+      setConfigTabExM1('presets');
+    }
+  };
+
+  const prevTabRef = useRef(activeTab);
+
+  const handleTabChange = (newTab: 'dashboard' | 'practice' | 'fluency' | 'exercises' | 'video', keepExerciseDetail = false) => {
+    prevTabRef.current = newTab;
+    resetActivityState(newTab, keepExerciseDetail);
+    setActiveTab(newTab);
+  };
+
+  useEffect(() => {
+    if (prevTabRef.current !== activeTab) {
+      prevTabRef.current = activeTab;
+      resetActivityState(activeTab, activeTab === 'exercises');
+    }
+  }, [activeTab]);
+
   return (
     <div className="container">
       <header className="app-header">
-        <div className="logo-container" onClick={() => setActiveTab('dashboard')}>
+        <div className="logo-container" onClick={() => handleTabChange('dashboard')}>
           <Activity size={30} className="logo-icon" style={{ color: 'var(--primary)' }} />
           <span className="logo-text">SpeechAI</span>
         </div>
 
         {/* Desktop Navigation Tabs */}
         <div className="nav-tab-bar">
-          <button className={`nav-tab-btn ${activeTab === 'dashboard' ? 'active' : ''}`} onClick={() => { setActiveTab('dashboard'); setStatus('idle'); setStatusMessage('Ready to record'); }}>
+          <button className={`nav-tab-btn ${activeTab === 'dashboard' ? 'active' : ''}`} onClick={() => handleTabChange('dashboard')}>
             <LayoutDashboard size={16} />
             <span>Dashboard</span>
           </button>
-          <button className={`nav-tab-btn ${activeTab === 'practice' ? 'active' : ''}`} onClick={() => { setActiveTab('practice'); setStatus('idle'); setStatusMessage('Ready to record'); setPracticeResult(null); }}>
+          <button className={`nav-tab-btn ${activeTab === 'practice' ? 'active' : ''}`} onClick={() => handleTabChange('practice')}>
             <BookOpen size={16} />
             <span><span className="nav-module-prefix">Module 1: </span>Practice</span>
           </button>
-          <button className={`nav-tab-btn ${activeTab === 'fluency' ? 'active' : ''}`} onClick={() => { setActiveTab('fluency'); setStatus('idle'); setStatusMessage('Ready to record'); setAnalysisResult(null); }}>
+          <button className={`nav-tab-btn ${activeTab === 'fluency' ? 'active' : ''}`} onClick={() => handleTabChange('fluency')}>
             <BarChart3 size={16} />
             <span><span className="nav-module-prefix">Module 2: </span>Fluency</span>
           </button>
-          <button className={`nav-tab-btn ${activeTab === 'video' ? 'active' : ''}`} onClick={() => { setActiveTab('video'); setStatus('idle'); setStatusMessage('Ready to record'); }}>
+          <button className={`nav-tab-btn ${activeTab === 'video' ? 'active' : ''}`} onClick={() => handleTabChange('video')}>
             <VideoIcon size={16} />
             <span><span className="nav-module-prefix">Module 3: </span>Video</span>
           </button>
-          <button className={`nav-tab-btn ${activeTab === 'exercises' ? 'active' : ''}`} onClick={() => { setActiveTab('exercises'); setStatus('idle'); setStatusMessage('Ready to record'); }}>
+          <button className={`nav-tab-btn ${activeTab === 'exercises' ? 'active' : ''}`} onClick={() => handleTabChange('exercises')}>
             <Compass size={16} />
             <span>Exercises</span>
           </button>
@@ -1562,6 +1749,104 @@ function App() {
                                    </div>
                                  )}
 
+                                 {session.filler_details && session.filler_details.length > 0 && (
+                                   <div style={{ marginBottom: '12px' }}>
+                                     <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Detected filler words:</span>
+                                     
+                                     <div style={{ 
+                                       position: 'relative', 
+                                       height: '10px', 
+                                       backgroundColor: 'var(--bg-primary)', 
+                                       border: '1px solid var(--border-color)', 
+                                       borderRadius: '5px', 
+                                       overflow: 'hidden', 
+                                       width: '100%', 
+                                       marginBottom: '6px' 
+                                     }}>
+                                       {session.filler_details.map((filler, idx) => {
+                                         const total = session.duration_sec || 1;
+                                         const leftPct = (filler.start / total) * 100;
+                                         const widthPct = Math.max((filler.duration / total) * 100, 1.2);
+                                         return (
+                                           <div 
+                                             key={idx} 
+                                             style={{ 
+                                               position: 'absolute', 
+                                               left: `${leftPct}%`, 
+                                               width: `${widthPct}%`, 
+                                               height: '100%', 
+                                               backgroundColor: '#f59e0b',
+                                               opacity: 0.85
+                                             }}
+                                             title={`Filler: "${filler.word}" (${filler.duration}s from ${filler.start}s to ${filler.end}s)`}
+                                           />
+                                         );
+                                       })}
+                                     </div>
+                                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                                       <span>0.0s</span>
+                                       <span>{(session.duration_sec || 0).toFixed(1)}s</span>
+                                     </div>
+
+                                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                       {session.filler_details.map((filler, idx) => (
+                                         <span key={idx} style={{ fontSize: '10px', backgroundColor: 'rgba(245, 158, 11, 0.12)', color: '#d97706', padding: '2px 6px', borderRadius: '4px', fontWeight: 500 }}>
+                                           "{filler.word}" at {filler.start}s ({filler.duration}s)
+                                         </span>
+                                       ))}
+                                     </div>
+                                   </div>
+                                 )}
+
+                                 {session.stammer_details && session.stammer_details.length > 0 && (
+                                   <div style={{ marginBottom: '12px' }}>
+                                     <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Detected stammers & repetitions:</span>
+                                     
+                                     <div style={{ 
+                                       position: 'relative', 
+                                       height: '10px', 
+                                       backgroundColor: 'var(--bg-primary)', 
+                                       border: '1px solid var(--border-color)', 
+                                       borderRadius: '5px', 
+                                       overflow: 'hidden', 
+                                       width: '100%', 
+                                       marginBottom: '6px' 
+                                     }}>
+                                       {session.stammer_details.map((stammer, idx) => {
+                                         const total = session.duration_sec || 1;
+                                         const leftPct = (stammer.start / total) * 100;
+                                         const widthPct = Math.max((stammer.duration / total) * 100, 1.2);
+                                         return (
+                                           <div 
+                                             key={idx} 
+                                             style={{ 
+                                               position: 'absolute', 
+                                               left: `${leftPct}%`, 
+                                               width: `${widthPct}%`, 
+                                               height: '100%', 
+                                               backgroundColor: '#ec4899',
+                                               opacity: 0.85
+                                             }}
+                                             title={`Stammer (${stammer.type}): "${stammer.text}" (${stammer.duration}s from ${stammer.start}s to ${stammer.end}s)`}
+                                           />
+                                         );
+                                       })}
+                                     </div>
+                                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                                       <span>0.0s</span>
+                                       <span>{(session.duration_sec || 0).toFixed(1)}s</span>
+                                     </div>
+
+                                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                       {session.stammer_details.map((stammer, idx) => (
+                                         <span key={idx} style={{ fontSize: '10px', backgroundColor: 'rgba(236, 72, 153, 0.12)', color: '#db2777', padding: '2px 6px', borderRadius: '4px', fontWeight: 500 }}>
+                                           "{stammer.text}" ({stammer.type}) at {stammer.start}s
+                                         </span>
+                                       ))}
+                                     </div>
+                                   </div>
+                                 )}
+
                                  {session.ai_pathologist_feedback && (
                                    <div style={{ marginBottom: '15px', padding: '10px', borderLeft: '3px solid var(--accent)', backgroundColor: 'rgba(99,102,241,0.01)' }}>
                                      <span style={{ fontSize: '11px', color: 'var(--accent)', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '2px' }}>
@@ -1597,7 +1882,7 @@ function App() {
                                             <button 
                                               onClick={() => {
                                                 if (exDetail) {
-                                                  setActiveTab('exercises');
+                                                  handleTabChange('exercises', true);
                                                   startExerciseDrill(exDetail);
                                                 } else {
                                                   const fallbackEx = {
@@ -1607,7 +1892,7 @@ function App() {
                                                     difficulty: 'intermediate',
                                                     trigger_condition: 'automatic'
                                                   };
-                                                  setActiveTab('exercises');
+                                                  handleTabChange('exercises', true);
                                                   startExerciseDrill(fallbackEx);
                                                 }
                                               }}
@@ -1649,7 +1934,7 @@ function App() {
                   📖 Target Practice Text
                 </h3>
                 <button
-                  onClick={() => isAudioPlaying && currentAudioType === 'reference' ? stopPlayback() : speakText(targetSentence)}
+                  onClick={() => (isAudioPlaying || isAudioLoading) && currentAudioType === 'reference' ? stopPlayback() : speakText(targetSentence)}
                   className="tts-btn"
                   style={{
                     display: 'inline-flex',
@@ -1667,12 +1952,12 @@ function App() {
                     marginTop: '0'
                   }}
                 >
-                  {isAudioPlaying && currentAudioType === 'reference' ? (
+                  {(isAudioPlaying || isAudioLoading) && currentAudioType === 'reference' ? (
                     <Square size={14} style={{ color: 'var(--error)' }} />
                   ) : (
                     <Volume2 size={14} style={{ color: 'var(--primary)' }} />
                   )}
-                  {isAudioPlaying && currentAudioType === 'reference' ? 'Stop' : 'Listen to Guide'}
+                  {(isAudioPlaying || isAudioLoading) && currentAudioType === 'reference' ? 'Stop' : 'Listen Reference'}
                 </button>
               </div>
               {!practiceResult ? (
@@ -1732,21 +2017,21 @@ function App() {
                       ✏ Custom
                     </button>
                     <button 
-                      onClick={() => setConfigTabM1('grok')}
+                      onClick={() => setConfigTabM1('groq')}
                       style={{ 
                         flex: 1, 
                         padding: '8px', 
                         fontSize: '12px', 
                         fontWeight: '600',
-                        backgroundColor: configTabM1 === 'grok' ? 'rgba(168, 85, 247, 0.1)' : 'transparent', 
-                        border: configTabM1 === 'grok' ? '1px solid var(--secondary)' : 'none', 
-                        color: configTabM1 === 'grok' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                        backgroundColor: configTabM1 === 'groq' ? 'rgba(168, 85, 247, 0.1)' : 'transparent', 
+                        border: configTabM1 === 'groq' ? '1px solid var(--secondary)' : 'none', 
+                        color: configTabM1 === 'groq' ? 'var(--text-primary)' : 'var(--text-secondary)',
                         borderRadius: '4px',
                         cursor: 'pointer',
                         transition: 'var(--transition-fast)'
                       }}
                     >
-                      ✨ Grok AI
+                      ✨ Groq AI
                     </button>
                   </div>
 
@@ -1788,10 +2073,10 @@ function App() {
                     </div>
                   )}
 
-                  {configTabM1 === 'grok' && (
+                  {configTabM1 === 'groq' && (
                     <div className="glass-card" style={{ padding: '16px', border: '1px solid var(--border-color)', backgroundColor: 'rgba(255,255,255,0.01)' }}>
                       <h3 style={{ fontSize: '13px', fontWeight: 'bold', color: 'var(--text-primary)', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <Sparkles size={14} style={{ color: 'var(--accent)' }} /> Generate Custom Text with Grok AI
+                        <Sparkles size={14} style={{ color: 'var(--accent)' }} /> Generate Custom Text with Groq AI
                       </h3>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                         <div className="form-group" style={{ marginBottom: '4px' }}>
@@ -1826,7 +2111,7 @@ function App() {
                             </select>
                           </div>
                           <div className="form-group" style={{ marginBottom: '4px' }}>
-                            <label className="form-label" style={{ fontSize: '10px' }}>Exercise Focus</label>
+                            <label className="form-label" style={{ fontSize: '10px' }}>Level of English</label>
                             <select 
                               style={{ 
                                 padding: '6px', 
@@ -1836,13 +2121,12 @@ function App() {
                                 borderRadius: 'var(--radius-sm)',
                                 fontSize: '13px'
                               }}
-                              value={aiFocusExercise}
-                              onChange={e => setAiFocusExercise(e.target.value)}
+                              value={aiEnglishLevel}
+                              onChange={e => setAiEnglishLevel(e.target.value as 'easy' | 'medium' | 'difficult')}
                             >
-                              <option value="none">None</option>
-                              <option value="silent_pause_drill">Silent Pause Focus</option>
-                              <option value="slow_rate_reading">Slow Rate Focus</option>
-                              <option value="articulation_drill">Articulation Focus</option>
+                              <option value="easy">Easy</option>
+                              <option value="medium">Medium</option>
+                              <option value="difficult">Difficult</option>
                             </select>
                           </div>
                         </div>
@@ -1858,7 +2142,7 @@ function App() {
                             </>
                           ) : (
                             <>
-                              <Sparkles size={14} /> Generate with Grok AI
+                              <Sparkles size={14} /> Generate with Groq AI
                             </>
                           )}
                         </button>
@@ -1933,12 +2217,12 @@ function App() {
                           transition: 'var(--transition-fast)'
                         }}
                       >
-                        {isAudioPlaying && currentAudioType === 'recording' ? (
+                        {(isAudioPlaying || isAudioLoading) && currentAudioType === 'recording' ? (
                           <Square size={14} style={{ color: 'var(--error)' }} />
                         ) : (
                           <Play size={14} style={{ color: 'var(--success)' }} />
                         )}
-                        {isAudioPlaying && currentAudioType === 'recording' ? 'Stop' : 'Play My Recording'}
+                        {(isAudioPlaying || isAudioLoading) && currentAudioType === 'recording' ? 'Stop' : 'Play My Recording'}
                       </button>
                     </div>
                   )}
@@ -1949,7 +2233,30 @@ function App() {
             {/* Practice Accuracy Scorecard */}
             {practiceResult && (
               <div className="glass-card result-section" style={{ marginTop: '30px' }}>
-                <h3 className="feedback-title" style={{ textAlign: 'center' }}>Pronunciation Analysis</h3>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                  <h3 className="feedback-title" style={{ margin: 0 }}>Pronunciation Analysis</h3>
+                  <button
+                    onClick={() => resetActivityState('practice')}
+                    style={{
+                      fontSize: '12px',
+                      fontWeight: '600',
+                      padding: '6px 14px',
+                      backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                      border: '1px solid var(--border-color)',
+                      borderRadius: 'var(--radius-sm)',
+                      color: 'var(--text-primary)',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      transition: 'var(--transition-fast)'
+                    }}
+                    title="Clear current results and start a new practice session"
+                  >
+                    <RefreshCw size={13} />
+                    Start New Practice
+                  </button>
+                </div>
                 <div className="result-grid">
                   <div className="score-panel">
                     <div className="score-circle">
@@ -2028,7 +2335,7 @@ function App() {
                   </h3>
                   <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                     <button
-                      onClick={() => isAudioPlaying && currentAudioType === 'reference' ? stopPlayback() : speakText(fluencyTargetText)}
+                      onClick={() => (isAudioPlaying || isAudioLoading) && currentAudioType === 'reference' ? stopPlayback() : speakText(fluencyTargetText)}
                       style={{
                         fontSize: '11px',
                         backgroundColor: 'rgba(255,255,255,0.03)',
@@ -2043,12 +2350,12 @@ function App() {
                         transition: 'var(--transition-fast)'
                       }}
                     >
-                      {isAudioPlaying && currentAudioType === 'reference' ? (
+                      {(isAudioPlaying || isAudioLoading) && currentAudioType === 'reference' ? (
                         <Square size={12} style={{ color: 'var(--error)' }} />
                       ) : (
                         <Volume2 size={12} style={{ color: 'var(--primary)' }} />
                       )}
-                      {isAudioPlaying && currentAudioType === 'reference' ? 'Stop' : 'Listen Reference'}
+                      {(isAudioPlaying || isAudioLoading) && currentAudioType === 'reference' ? 'Stop' : 'Listen Reference'}
                     </button>
                     <button 
                       onClick={() => { setFluencyTargetText(''); setAnalysisResult(null); }}
@@ -2123,21 +2430,21 @@ function App() {
                       💡 Topic Prompts
                     </button>
                     <button 
-                      onClick={() => setConfigTabM2('grok')}
+                      onClick={() => setConfigTabM2('groq')}
                       style={{ 
                         flex: 1, 
                         padding: '8px', 
                         fontSize: '12px', 
                         fontWeight: '600',
-                        backgroundColor: configTabM2 === 'grok' ? 'rgba(168, 85, 247, 0.1)' : 'transparent', 
-                        border: configTabM2 === 'grok' ? '1px solid var(--secondary)' : 'none', 
-                        color: configTabM2 === 'grok' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                        backgroundColor: configTabM2 === 'groq' ? 'rgba(168, 85, 247, 0.1)' : 'transparent', 
+                        border: configTabM2 === 'groq' ? '1px solid var(--secondary)' : 'none', 
+                        color: configTabM2 === 'groq' ? 'var(--text-primary)' : 'var(--text-secondary)',
                         borderRadius: '4px',
                         cursor: 'pointer',
                         transition: 'var(--transition-fast)'
                       }}
                     >
-                      ✨ Grok AI
+                      ✨ Groq AI
                     </button>
                   </div>
 
@@ -2167,10 +2474,10 @@ function App() {
                     </div>
                   )}
 
-                  {configTabM2 === 'grok' && (
+                  {configTabM2 === 'groq' && (
                     <div className="glass-card" style={{ padding: '16px', border: '1px solid var(--border-color)', backgroundColor: 'rgba(255,255,255,0.01)' }}>
                       <h3 style={{ fontSize: '13px', fontWeight: 'bold', color: 'var(--text-primary)', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <Sparkles size={14} style={{ color: 'var(--accent)' }} /> Generate Custom Text with Grok AI
+                        <Sparkles size={14} style={{ color: 'var(--accent)' }} /> Generate Custom Text with Groq AI
                       </h3>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                         <div className="form-group" style={{ marginBottom: '4px' }}>
@@ -2204,7 +2511,7 @@ function App() {
                             </select>
                           </div>
                           <div className="form-group" style={{ marginBottom: '4px' }}>
-                            <label className="form-label" style={{ fontSize: '10px' }}>Exercise Focus</label>
+                            <label className="form-label" style={{ fontSize: '10px' }}>Level of English</label>
                             <select 
                               style={{ 
                                 padding: '6px', 
@@ -2214,13 +2521,12 @@ function App() {
                                 borderRadius: 'var(--radius-sm)',
                                 fontSize: '13px'
                               }}
-                              value={aiFocusExercise}
-                              onChange={e => setAiFocusExercise(e.target.value)}
+                              value={aiEnglishLevel}
+                              onChange={e => setAiEnglishLevel(e.target.value as 'easy' | 'medium' | 'difficult')}
                             >
-                              <option value="none">None</option>
-                              <option value="silent_pause_drill">Silent Pause Focus</option>
-                              <option value="slow_rate_reading">Slow Rate Focus</option>
-                              <option value="articulation_drill">Articulation Focus</option>
+                              <option value="easy">Easy</option>
+                              <option value="medium">Medium</option>
+                              <option value="difficult">Difficult</option>
                             </select>
                           </div>
                         </div>
@@ -2236,7 +2542,7 @@ function App() {
                             </>
                           ) : (
                             <>
-                              <Sparkles size={14} /> Generate with Grok AI
+                              <Sparkles size={14} /> Generate with Groq AI
                             </>
                           )}
                         </button>
@@ -2315,12 +2621,12 @@ function App() {
                           transition: 'var(--transition-fast)'
                         }}
                       >
-                        {isAudioPlaying && currentAudioType === 'recording' ? (
+                        {(isAudioPlaying || isAudioLoading) && currentAudioType === 'recording' ? (
                           <Square size={14} style={{ color: 'var(--error)' }} />
                         ) : (
                           <Play size={14} style={{ color: 'var(--success)' }} />
                         )}
-                        {isAudioPlaying && currentAudioType === 'recording' ? 'Stop' : 'Play My Recording'}
+                        {(isAudioPlaying || isAudioLoading) && currentAudioType === 'recording' ? 'Stop' : 'Play My Recording'}
                       </button>
                     </div>
                   )}
@@ -2331,7 +2637,30 @@ function App() {
             {/* Fluency Score Report */}
             {analysisResult && (
               <div className="glass-card result-section" style={{ marginTop: '30px' }}>
-                <h3 className="feedback-title" style={{ textAlign: 'center' }}>Fluency & Clarity Analysis</h3>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                  <h3 className="feedback-title" style={{ margin: 0 }}>Fluency & Clarity Analysis</h3>
+                  <button
+                    onClick={() => resetActivityState('fluency')}
+                    style={{
+                      fontSize: '12px',
+                      fontWeight: '600',
+                      padding: '6px 14px',
+                      backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                      border: '1px solid var(--border-color)',
+                      borderRadius: 'var(--radius-sm)',
+                      color: 'var(--text-primary)',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      transition: 'var(--transition-fast)'
+                    }}
+                    title="Clear current report and start a new fluency prompt"
+                  >
+                    <RefreshCw size={13} />
+                    Start New Practice
+                  </button>
+                </div>
                 
                 <div className="result-grid">
                   <div className="score-panel">
@@ -2428,6 +2757,112 @@ function App() {
                           {analysisResult.pause_details.map((pause, idx) => (
                             <span key={idx} style={{ fontSize: '11px', backgroundColor: 'var(--warning-light)', color: 'var(--warning)', padding: '2px 8px', borderRadius: '4px' }}>
                               {pause.duration}s gap at {pause.start}s
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Detected Filler Words Timeline and Chips */}
+                    {analysisResult.filler_details && analysisResult.filler_details.length > 0 && (
+                      <div style={{ marginTop: '16px', padding: '12px', backgroundColor: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
+                        <h5 style={{ fontSize: '13px', fontWeight: 'bold', color: 'var(--text-primary)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          🗣️ Detected Filler Word Locations:
+                        </h5>
+                        
+                        {/* Interactive Filler timeline bar */}
+                        <div style={{ 
+                          position: 'relative', 
+                          height: '12px', 
+                          backgroundColor: 'var(--bg-primary)', 
+                          border: '1px solid var(--border-color)', 
+                          borderRadius: '6px', 
+                          overflow: 'hidden', 
+                          width: '100%', 
+                          marginBottom: '8px' 
+                        }}>
+                          {analysisResult.filler_details.map((filler, idx) => {
+                            const total = analysisResult.duration_sec || 1;
+                            const leftPct = (filler.start / total) * 100;
+                            const widthPct = Math.max((filler.duration / total) * 100, 1.2);
+                            return (
+                              <div 
+                                key={idx} 
+                                style={{ 
+                                  position: 'absolute', 
+                                  left: `${leftPct}%`, 
+                                  width: `${widthPct}%`, 
+                                  height: '100%', 
+                                  backgroundColor: '#f59e0b',
+                                  opacity: 0.85
+                                }}
+                                title={`Filler: "${filler.word}" (${filler.duration}s from ${filler.start}s to ${filler.end}s)`}
+                              />
+                            );
+                          })}
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+                          <span>0.0s</span>
+                          <span>{(analysisResult.duration_sec || 0).toFixed(1)}s</span>
+                        </div>
+
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                          {analysisResult.filler_details.map((filler, idx) => (
+                            <span key={idx} style={{ fontSize: '11px', backgroundColor: 'rgba(245, 158, 11, 0.12)', color: '#d97706', padding: '2px 8px', borderRadius: '4px', fontWeight: 500 }}>
+                              "{filler.word}" at {filler.start}s ({filler.duration}s)
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Detected Stammers and Repetitions Timeline and Chips */}
+                    {analysisResult.stammer_details && analysisResult.stammer_details.length > 0 && (
+                      <div style={{ marginTop: '16px', padding: '12px', backgroundColor: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
+                        <h5 style={{ fontSize: '13px', fontWeight: 'bold', color: 'var(--text-primary)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          ⚡ Detected Stammers & Repetitions:
+                        </h5>
+                        
+                        {/* Interactive Stammer timeline bar */}
+                        <div style={{ 
+                          position: 'relative', 
+                          height: '12px', 
+                          backgroundColor: 'var(--bg-primary)', 
+                          border: '1px solid var(--border-color)', 
+                          borderRadius: '6px', 
+                          overflow: 'hidden', 
+                          width: '100%', 
+                          marginBottom: '8px' 
+                        }}>
+                          {analysisResult.stammer_details.map((stammer, idx) => {
+                            const total = analysisResult.duration_sec || 1;
+                            const leftPct = (stammer.start / total) * 100;
+                            const widthPct = Math.max((stammer.duration / total) * 100, 1.2);
+                            return (
+                              <div 
+                                key={idx} 
+                                style={{ 
+                                  position: 'absolute', 
+                                  left: `${leftPct}%`, 
+                                  width: `${widthPct}%`, 
+                                  height: '100%', 
+                                  backgroundColor: '#ec4899',
+                                  opacity: 0.85
+                                }}
+                                title={`Stammer (${stammer.type}): "${stammer.text}" (${stammer.duration}s from ${stammer.start}s to ${stammer.end}s)`}
+                              />
+                            );
+                          })}
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+                          <span>0.0s</span>
+                          <span>{(analysisResult.duration_sec || 0).toFixed(1)}s</span>
+                        </div>
+
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                          {analysisResult.stammer_details.map((stammer, idx) => (
+                            <span key={idx} style={{ fontSize: '11px', backgroundColor: 'rgba(236, 72, 153, 0.12)', color: '#db2777', padding: '2px 8px', borderRadius: '4px', fontWeight: 500 }}>
+                              "{stammer.text}" ({stammer.type}) at {stammer.start}s
                             </span>
                           ))}
                         </div>
@@ -2580,7 +3015,7 @@ function App() {
                             <button 
                               onClick={() => {
                                 if (exDetail) {
-                                  setActiveTab('exercises');
+                                  handleTabChange('exercises', true);
                                   startExerciseDrill(exDetail);
                                 } else {
                                   const fallbackEx = {
@@ -2590,7 +3025,7 @@ function App() {
                                     difficulty: 'intermediate',
                                     trigger_condition: 'automatic'
                                   };
-                                  setActiveTab('exercises');
+                                  handleTabChange('exercises', true);
                                   startExerciseDrill(fallbackEx);
                                 }
                               }}
@@ -2713,7 +3148,7 @@ function App() {
                         📖 Target Practice Passage
                       </h3>
                       <button
-                        onClick={() => isAudioPlaying && currentAudioType === 'reference' ? stopPlayback() : speakText(exerciseTargetText)}
+                        onClick={() => (isAudioPlaying || isAudioLoading) && currentAudioType === 'reference' ? stopPlayback() : speakText(exerciseTargetText)}
                         style={{
                           fontSize: '11px',
                           backgroundColor: 'rgba(255,255,255,0.03)',
@@ -2728,12 +3163,12 @@ function App() {
                           transition: 'var(--transition-fast)'
                         }}
                       >
-                        {isAudioPlaying && currentAudioType === 'reference' ? (
+                        {(isAudioPlaying || isAudioLoading) && currentAudioType === 'reference' ? (
                           <Square size={12} style={{ color: 'var(--error)' }} />
                         ) : (
                           <Volume2 size={12} style={{ color: 'var(--primary)' }} />
                         )}
-                        {isAudioPlaying && currentAudioType === 'reference' ? 'Stop' : 'Listen Reference'}
+                        {(isAudioPlaying || isAudioLoading) && currentAudioType === 'reference' ? 'Stop' : 'Listen Reference'}
                       </button>
                     </div>
                     {!practiceResult ? (
@@ -2872,21 +3307,21 @@ function App() {
                           ✏ Custom
                         </button>
                         <button 
-                          onClick={() => { setConfigTabExM1('grok'); setPracticeResult(null); setAnalysisResult(null); }}
+                          onClick={() => { setConfigTabExM1('groq'); setPracticeResult(null); setAnalysisResult(null); }}
                           style={{ 
                             flex: 1, 
                             padding: '8px', 
                             fontSize: '12px', 
                             fontWeight: '600',
-                            backgroundColor: configTabExM1 === 'grok' ? 'rgba(168, 85, 247, 0.1)' : 'transparent', 
-                            border: configTabExM1 === 'grok' ? '1px solid var(--secondary)' : 'none', 
-                            color: configTabExM1 === 'grok' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                            backgroundColor: configTabExM1 === 'groq' ? 'rgba(168, 85, 247, 0.1)' : 'transparent', 
+                            border: configTabExM1 === 'groq' ? '1px solid var(--secondary)' : 'none', 
+                            color: configTabExM1 === 'groq' ? 'var(--text-primary)' : 'var(--text-secondary)',
                             borderRadius: '4px',
                             cursor: 'pointer',
                             transition: 'var(--transition-fast)'
                           }}
                         >
-                          ✨ Grok AI
+                          ✨ Groq AI
                         </button>
                       </div>
 
@@ -2930,10 +3365,10 @@ function App() {
                         </div>
                       )}
 
-                      {configTabExM1 === 'grok' && (
+                      {configTabExM1 === 'groq' && (
                         <div className="glass-card" style={{ padding: '16px', border: '1px solid var(--border-color)', backgroundColor: 'rgba(255,255,255,0.01)' }}>
                           <h3 style={{ fontSize: '13px', fontWeight: 'bold', color: 'var(--text-primary)', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <Sparkles size={14} style={{ color: 'var(--accent)' }} /> Generate Custom Text with Grok AI
+                            <Sparkles size={14} style={{ color: 'var(--accent)' }} /> Generate Custom Text with Groq AI
                           </h3>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                             <div className="form-group" style={{ marginBottom: '4px' }}>
@@ -2956,7 +3391,7 @@ function App() {
                               {isGenerating ? (
                                 <><RefreshCw size={14} className="spin" /> Generating...</>
                               ) : (
-                                <><Sparkles size={14} /> Generate with Grok AI</>
+                                <><Sparkles size={14} /> Generate with Groq AI</>
                               )}
                             </button>
                           </div>
@@ -3042,12 +3477,12 @@ function App() {
                               transition: 'var(--transition-fast)'
                             }}
                           >
-                            {isAudioPlaying && currentAudioType === 'recording' ? (
+                            {(isAudioPlaying || isAudioLoading) && currentAudioType === 'recording' ? (
                               <Square size={14} style={{ color: 'var(--error)' }} />
                             ) : (
                               <Play size={14} style={{ color: 'var(--success)' }} />
                             )}
-                            {isAudioPlaying && currentAudioType === 'recording' ? 'Stop' : 'Play My Recording'}
+                            {(isAudioPlaying || isAudioLoading) && currentAudioType === 'recording' ? 'Stop' : 'Play My Recording'}
                           </button>
                         </div>
                       )}
@@ -3199,6 +3634,112 @@ function App() {
                               {analysisResult.pause_details.map((pause, idx) => (
                                 <span key={idx} style={{ fontSize: '11px', backgroundColor: 'var(--warning-light)', color: 'var(--warning)', padding: '2px 8px', borderRadius: '4px' }}>
                                   {pause.duration}s gap at {pause.start}s
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Detected Filler Words Timeline and Chips */}
+                        {analysisResult.filler_details && analysisResult.filler_details.length > 0 && (
+                          <div style={{ marginTop: '16px', padding: '12px', backgroundColor: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
+                            <h5 style={{ fontSize: '13px', fontWeight: 'bold', color: 'var(--text-primary)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              🗣️ Detected Filler Word Locations:
+                            </h5>
+                            
+                            {/* Interactive Filler timeline bar */}
+                            <div style={{ 
+                              position: 'relative', 
+                              height: '12px', 
+                              backgroundColor: 'var(--bg-primary)', 
+                              border: '1px solid var(--border-color)', 
+                              borderRadius: '6px', 
+                              overflow: 'hidden', 
+                              width: '100%', 
+                              marginBottom: '8px' 
+                            }}>
+                              {analysisResult.filler_details.map((filler, idx) => {
+                                const total = analysisResult.duration_sec || 1;
+                                const leftPct = (filler.start / total) * 100;
+                                const widthPct = Math.max((filler.duration / total) * 100, 1.2);
+                                return (
+                                  <div 
+                                    key={idx} 
+                                    style={{ 
+                                      position: 'absolute', 
+                                      left: `${leftPct}%`, 
+                                      width: `${widthPct}%`, 
+                                      height: '100%', 
+                                      backgroundColor: '#f59e0b',
+                                      opacity: 0.85
+                                    }}
+                                    title={`Filler: "${filler.word}" (${filler.duration}s from ${filler.start}s to ${filler.end}s)`}
+                                  />
+                                );
+                              })}
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+                              <span>0.0s</span>
+                              <span>{(analysisResult.duration_sec || 0).toFixed(1)}s</span>
+                            </div>
+
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                              {analysisResult.filler_details.map((filler, idx) => (
+                                <span key={idx} style={{ fontSize: '11px', backgroundColor: 'rgba(245, 158, 11, 0.12)', color: '#d97706', padding: '2px 8px', borderRadius: '4px', fontWeight: 500 }}>
+                                  "{filler.word}" at {filler.start}s ({filler.duration}s)
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Detected Stammers and Repetitions Timeline and Chips */}
+                        {analysisResult.stammer_details && analysisResult.stammer_details.length > 0 && (
+                          <div style={{ marginTop: '16px', padding: '12px', backgroundColor: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
+                            <h5 style={{ fontSize: '13px', fontWeight: 'bold', color: 'var(--text-primary)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              ⚡ Detected Stammers & Repetitions:
+                            </h5>
+                            
+                            {/* Interactive Stammer timeline bar */}
+                            <div style={{ 
+                              position: 'relative', 
+                              height: '12px', 
+                              backgroundColor: 'var(--bg-primary)', 
+                              border: '1px solid var(--border-color)', 
+                              borderRadius: '6px', 
+                              overflow: 'hidden', 
+                              width: '100%', 
+                              marginBottom: '8px' 
+                            }}>
+                              {analysisResult.stammer_details.map((stammer, idx) => {
+                                const total = analysisResult.duration_sec || 1;
+                                const leftPct = (stammer.start / total) * 100;
+                                const widthPct = Math.max((stammer.duration / total) * 100, 1.2);
+                                return (
+                                  <div 
+                                    key={idx} 
+                                    style={{ 
+                                      position: 'absolute', 
+                                      left: `${leftPct}%`, 
+                                      width: `${widthPct}%`, 
+                                      height: '100%', 
+                                      backgroundColor: '#ec4899',
+                                      opacity: 0.85
+                                    }}
+                                    title={`Stammer (${stammer.type}): "${stammer.text}" (${stammer.duration}s from ${stammer.start}s to ${stammer.end}s)`}
+                                  />
+                                );
+                              })}
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+                              <span>0.0s</span>
+                              <span>{(analysisResult.duration_sec || 0).toFixed(1)}s</span>
+                            </div>
+
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                              {analysisResult.stammer_details.map((stammer, idx) => (
+                                <span key={idx} style={{ fontSize: '11px', backgroundColor: 'rgba(236, 72, 153, 0.12)', color: '#db2777', padding: '2px 8px', borderRadius: '4px', fontWeight: 500 }}>
+                                  "{stammer.text}" ({stammer.type}) at {stammer.start}s
                                 </span>
                               ))}
                             </div>

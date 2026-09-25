@@ -50,7 +50,7 @@ SpeechAI is an AI-driven speech therapy and fluency training system. It provides
   - `length` (`sentence`, `paragraph`, `long_paragraph`)
   - `exercise_id` (optional)
 - Behavior:
-  - If API key present, calls Groq/Grok AI via OpenAI-like chat completions
+  - If API key present, calls Groq AI via OpenAI-like chat completions
   - Otherwise returns local fallback templates
 - Purpose:
   - Generate practice prompts or passages tailored to either free practice or drill exercises
@@ -217,7 +217,7 @@ SpeechAI is an AI-driven speech therapy and fluency training system. It provides
       |                    |-- Whisper transcription
       |                    |-- jiwer WER scoring
       |                    |-- filler/stammer/pause analysis
-      |                    |-- AI text generation (Groq/Grok) if API key configured
+      |                    |-- AI text generation (Groq) if API key configured
       |                    |-- MongoDB persistence
       V                    |-- User auth token verification
   React + Recharts UI        V
