@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { Camera, Mic, CheckCircle2, AlertTriangle, ArrowRight, ShieldCheck, Loader2 } from 'lucide-react';
+import { Camera, Mic, CheckCircle2, AlertTriangle, ArrowRight, Loader2 } from 'lucide-react';
 import { useFaceTracking } from '../hooks/useFaceTracking';
 
 interface SetupCheckProps {
