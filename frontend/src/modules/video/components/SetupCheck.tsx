@@ -136,23 +136,6 @@ export const SetupCheck: React.FC<SetupCheckProps> = ({
               </div>
             </div>
 
-            {/* Privacy notice badge */}
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              marginTop: '10px',
-              padding: '10px 14px',
-              borderRadius: 'var(--radius-md)',
-              background: 'rgba(99, 102, 241, 0.08)',
-              border: '1px solid rgba(99, 102, 241, 0.2)'
-            }}>
-              <ShieldCheck size={18} style={{ color: 'var(--primary)', flexShrink: 0 }} />
-              <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-                <strong>Privacy by default:</strong> Raw videos are analyzed on the server and immediately purged.
-              </span>
-            </div>
-
             {error && (
               <div style={{ color: 'var(--error)', fontSize: '13px', background: 'var(--error-light)', padding: '10px', borderRadius: 'var(--radius-sm)' }}>
                 {error}

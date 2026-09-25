@@ -8,6 +8,9 @@ export interface SpeechFeatures {
   long_pauses: number;
   pause_ratio: number;
   clarity_raw: number;
+  pause_events?: Array<{ start: number; end: number; duration: number }>;
+  filler_details?: Array<{ word: string; start: number; end: number; duration: number }>;
+  stammer_details?: Array<{ text: string; type: string; start: number; end: number; duration: number }>;
 }
 
 export interface VisualFeatures {

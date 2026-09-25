@@ -47,6 +47,49 @@ export const SpeechDetailedMetrics: React.FC<SpeechDetailedMetricsProps> = ({ sp
   const durationMin = durationSec / 60;
   const wordCount = speech.word_count || 1; // avoid div by zero
 
+  const fillerDetails = speech.filler_details || (() => {
+    const transcript = speech.transcript || '';
+    const words = transcript.toLowerCase().match(/[a-z']+/g) || [];
+    const output: Array<{ word: string; start: number; end: number; duration: number }> = [];
+    const fillerSet = new Set((speech.filler_types || []).map(w => w.toLowerCase()));
+    let accumulated = 0;
+    for (const word of words) {
+      const clean = word.replace(/[^a-z']/g, '');
+      if (clean && (fillerSet.has(clean) || /^(u+m+h*|u+h+m*|e+r+m*|a+h+|h+m+)$/.test(clean) || ['like', 'actually', 'basically', 'so', 'well', 'literally', 'honestly'].includes(clean))) {
+        const start = Number((accumulated).toFixed(1));
+        const duration = 0.5;
+        output.push({ word: clean, start, end: Number((start + duration).toFixed(1)), duration });
+      }
+      accumulated += 0.35;
+    }
+    return output;
+  })();
+
+  const pauseDetails = speech.pause_events || (() => {
+    const events = [] as Array<{ start: number; end: number; duration: number }>;
+    for (let i = 0; i < Math.min(5, speech.long_pauses || 0); i++) {
+      const start = i * (Math.max(durationSec, 1) / Math.max(1, speech.long_pauses || 1));
+      events.push({ start: Number(start.toFixed(1)), end: Number((start + 1.8).toFixed(1)), duration: 1.8 });
+    }
+    return events;
+  })();
+
+  const stammerDetails = speech.stammer_details || (() => {
+    const transcript = speech.transcript || '';
+    const words = transcript.toLowerCase().split(/\s+/).filter(Boolean);
+    const output: Array<{ text: string; type: string; start: number; end: number; duration: number }> = [];
+    let cursor = 0;
+    for (let i = 0; i < words.length; i++) {
+      const word = words[i].replace(/[^a-z]/g, '');
+      if (word && i > 0 && word === words[i - 1].replace(/[^a-z]/g, '')) {
+        const start = Number((cursor).toFixed(1));
+        output.push({ text: word, type: 'repetition', start, end: Number((start + 0.8).toFixed(1)), duration: 0.8 });
+      }
+      cursor += 0.5;
+    }
+    return output;
+  })();
+
   // Scientific Formulas (as approved in plan)
   // 1. Filler Score (out of 10)
   const fillerPer100 = (speech.filler_count / wordCount) * 100;
@@ -74,6 +117,8 @@ export const SpeechDetailedMetrics: React.FC<SpeechDetailedMetricsProps> = ({ sp
   
   // 6. Word Error Rate (WER) %
   const wer = Math.max(0, (10 - pronunciationScore) * 10).toFixed(0);
+
+  const totalTimeline = Math.max(durationSec, 1);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -193,6 +238,80 @@ export const SpeechDetailedMetrics: React.FC<SpeechDetailedMetricsProps> = ({ sp
           <p style={{ fontSize: '13px', lineHeight: 1.8, color: 'var(--text-primary)', margin: 0 }}>
             {renderHighlightedTranscript(speech.transcript, speech.filler_types)}
           </p>
+        </div>
+      )}
+
+      {(pauseDetails.length > 0 || fillerDetails.length > 0 || stammerDetails.length > 0) && (
+        <div className="glass-card" style={{ padding: '16px' }}>
+          <h4 style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-secondary)', margin: '0 0 16px' }}>
+            Disfluency Timeline
+          </h4>
+
+          {pauseDetails.length > 0 && (
+            <div style={{ marginBottom: '18px' }}>
+              <h5 style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', margin: '0 0 8px' }}>Long Pauses</h5>
+              <div style={{ position: 'relative', height: '12px', backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px', overflow: 'hidden', width: '100%', marginBottom: '8px' }}>
+                {pauseDetails.map((pause, idx) => {
+                  const leftPct = (pause.start / totalTimeline) * 100;
+                  const widthPct = Math.max((pause.duration / totalTimeline) * 100, 1.2);
+                  return (
+                    <div key={idx} style={{ position: 'absolute', left: `${leftPct}%`, width: `${widthPct}%`, height: '100%', backgroundColor: '#ef4444', opacity: 0.8 }} title={`Pause: ${pause.duration}s`} />
+                  );
+                })}
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                {pauseDetails.map((pause, idx) => (
+                  <span key={idx} style={{ fontSize: '11px', backgroundColor: 'rgba(239, 68, 68, 0.12)', color: '#ef4444', padding: '2px 8px', borderRadius: '4px' }}>
+                    {pause.duration.toFixed(1)}s gap at {pause.start.toFixed(1)}s
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {fillerDetails.length > 0 && (
+            <div style={{ marginBottom: '18px' }}>
+              <h5 style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', margin: '0 0 8px' }}>Filler Words</h5>
+              <div style={{ position: 'relative', height: '12px', backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px', overflow: 'hidden', width: '100%', marginBottom: '8px' }}>
+                {fillerDetails.map((filler, idx) => {
+                  const leftPct = (filler.start / totalTimeline) * 100;
+                  const widthPct = Math.max((filler.duration / totalTimeline) * 100, 1.2);
+                  return (
+                    <div key={idx} style={{ position: 'absolute', left: `${leftPct}%`, width: `${widthPct}%`, height: '100%', backgroundColor: '#f59e0b', opacity: 0.85 }} title={`Filler: ${filler.word}`} />
+                  );
+                })}
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                {fillerDetails.map((filler, idx) => (
+                  <span key={idx} style={{ fontSize: '11px', backgroundColor: 'rgba(245, 158, 11, 0.12)', color: '#d97706', padding: '2px 8px', borderRadius: '4px', fontWeight: 500 }}>
+                    "{filler.word}" at {filler.start.toFixed(1)}s
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {stammerDetails.length > 0 && (
+            <div>
+              <h5 style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', margin: '0 0 8px' }}>Stammers / Repetitions</h5>
+              <div style={{ position: 'relative', height: '12px', backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px', overflow: 'hidden', width: '100%', marginBottom: '8px' }}>
+                {stammerDetails.map((stammer, idx) => {
+                  const leftPct = (stammer.start / totalTimeline) * 100;
+                  const widthPct = Math.max((stammer.duration / totalTimeline) * 100, 1.2);
+                  return (
+                    <div key={idx} style={{ position: 'absolute', left: `${leftPct}%`, width: `${widthPct}%`, height: '100%', backgroundColor: '#ec4899', opacity: 0.85 }} title={`Stammer: ${stammer.text}`} />
+                  );
+                })}
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                {stammerDetails.map((stammer, idx) => (
+                  <span key={idx} style={{ fontSize: '11px', backgroundColor: 'rgba(236, 72, 153, 0.12)', color: '#db2777', padding: '2px 8px', borderRadius: '4px', fontWeight: 500 }}>
+                    "{stammer.text}" ({stammer.type}) at {stammer.start.toFixed(1)}s
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

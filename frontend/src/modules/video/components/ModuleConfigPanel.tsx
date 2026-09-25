@@ -23,7 +23,7 @@ export const ModuleConfigPanel: React.FC<ModuleConfigPanelProps> = ({ onStartSes
   // Custom Topic states
   const [aiTopic, setAiTopic] = useState('Artificial Intelligence');
   const [aiLength, setAiLength] = useState<'sentence' | 'paragraph' | 'long_paragraph'>('paragraph');
-  const [aiFocusExercise, setAiFocusExercise] = useState('none');
+  const [aiEnglishLevel, setAiEnglishLevel] = useState<'easy' | 'medium' | 'difficult'>('medium');
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedText, setGeneratedText] = useState<string | null>(null);
 
@@ -31,7 +31,7 @@ export const ModuleConfigPanel: React.FC<ModuleConfigPanelProps> = ({ onStartSes
     setIsGenerating(true);
     setGeneratedText(null);
     try {
-      const url = `http://127.0.0.1:8000/practice/generate?topic=${encodeURIComponent(topicParam)}&length=${aiLength}&exercise_id=${aiFocusExercise}`;
+      const url = `http://127.0.0.1:8000/practice/generate?topic=${encodeURIComponent(topicParam)}&length=${aiLength}&level=${aiEnglishLevel}&exercise_id=none`;
       const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
@@ -56,8 +56,11 @@ export const ModuleConfigPanel: React.FC<ModuleConfigPanelProps> = ({ onStartSes
   };
 
   return (
-    <div style={{ maxWidth: '800px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '24px' }}>
-      <h2 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-primary)' }}>Select Practice Mode</h2>
+    <div className="workspace-panel" style={{ maxWidth: '800px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '24px' }}>
+      <div>
+        <h2 className="panel-title">Select Practice Mode</h2>
+        <p className="panel-subtitle">Choose the speaking context and difficulty for your multimodal communication session.</p>
+      </div>
       
       <div className="vid-task-selector">
         <div
@@ -115,8 +118,8 @@ export const ModuleConfigPanel: React.FC<ModuleConfigPanelProps> = ({ onStartSes
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: '10px', alignItems: 'flex-end' }}>
-            <div>
-              <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '4px' }}>Topic Keyword</label>
+            <div className="form-group" style={{ marginBottom: '0' }}>
+              <label className="form-label" style={{ fontSize: '10px' }}>Topic Keyword</label>
               <input
                 type="text"
                 className="form-input"
@@ -125,8 +128,8 @@ export const ModuleConfigPanel: React.FC<ModuleConfigPanelProps> = ({ onStartSes
                 onChange={(e) => setAiTopic(e.target.value)}
               />
             </div>
-            <div>
-              <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '4px' }}>Length</label>
+            <div className="form-group" style={{ marginBottom: '0' }}>
+              <label className="form-label" style={{ fontSize: '10px' }}>Length</label>
               <select
                 className="form-input"
                 style={{ width: '100%', padding: '7px 10px', fontSize: '13px' }}
@@ -138,17 +141,17 @@ export const ModuleConfigPanel: React.FC<ModuleConfigPanelProps> = ({ onStartSes
                 <option value="long_paragraph">Long Paragraph</option>
               </select>
             </div>
-            <div>
-              <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '4px' }}>Focus Drill</label>
+            <div className="form-group" style={{ marginBottom: '0' }}>
+              <label className="form-label" style={{ fontSize: '10px' }}>Level of English</label>
               <select
                 className="form-input"
                 style={{ width: '100%', padding: '7px 10px', fontSize: '13px' }}
-                value={aiFocusExercise}
-                onChange={(e) => setAiFocusExercise(e.target.value)}
+                value={aiEnglishLevel}
+                onChange={(e) => setAiEnglishLevel(e.target.value as 'easy' | 'medium' | 'difficult')}
               >
-                <option value="none">Standard</option>
-                <option value="silent_pause_drill">Silent Pause</option>
-                <option value="slow_rate_reading">Slow Rate</option>
+                <option value="easy">Easy</option>
+                <option value="medium">Medium</option>
+                <option value="difficult">Difficult</option>
               </select>
             </div>
             <button
