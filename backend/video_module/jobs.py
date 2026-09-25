@@ -1,8 +1,10 @@
 import os
 import shutil
 import logging
+import time
 from datetime import datetime
 from typing import Dict, Any, Optional
+import cv2
 
 from video_module.media_utils import extract_audio, probe_video
 from video_module.frame_sampler import sample_frames
@@ -101,7 +103,6 @@ async def process_video_job(
 
         frame_results = []
         for ts, fpath in sampled_frames:
-            import cv2
             img_bgr = cv2.imread(fpath)
             if img_bgr is not None:
                 res = analyze_frame(img_bgr, ts)

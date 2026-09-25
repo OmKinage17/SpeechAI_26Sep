@@ -8,4 +8,4 @@ openai-whisper
 static-ffmpeg
 httpx
 edge-tts
-
+python-dotenv

@@ -8,6 +8,11 @@ import hmac
 import secrets
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
+from dotenv import load_dotenv
+
+# Load environment variables from backend/.env or root .env
+load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
@@ -596,6 +601,114 @@ def read_root():
         "database_connected": db is not None
     }
 
+# ==========================================
+# LLM HELPER (Gemini 2.5 Flash + Groq Cloud Failover)
+# ==========================================
+async def query_llm(prompt: str, system_prompt: str = "You are a professional speech therapy assistant.") -> tuple[Optional[str], Optional[str]]:
+    """
+    Queries Google Gemini API or Groq Cloud API with graceful failover.
+    Returns (response_text, provider_name) or (None, None).
+    """
+    gemini_key = os.getenv("GEMINI_API_KEY")
+    groq_key = os.getenv("GROK_API_KEY")
+    xai_key = os.getenv("XAI_API_KEY")
+
+    # 1. Try Google Gemini API (gemini-2.5-flash)
+    if gemini_key:
+        try:
+            logger.info("Querying Google Gemini 2.5 Flash API...")
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                full_text = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+                res = await client.post(
+                    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+                    headers={
+                        "x-goog-api-key": gemini_key,
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "contents": [{"parts": [{"text": full_text}]}]
+                    }
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    candidates = data.get("candidates", [])
+                    if candidates:
+                        text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
+                        if text:
+                            if text.startswith('"') and text.endswith('"'):
+                                text = text[1:-1]
+                            logger.info("Successfully received response from Google Gemini API.")
+                            return text, "Google Gemini"
+                else:
+                    logger.warning(f"Gemini API returned status {res.status_code}: {res.text[:150]}")
+        except Exception as e:
+            logger.warning(f"Error querying Gemini API: {e}")
+
+    # 2. Try Groq Cloud (openai/gpt-oss-120b or openai/gpt-oss-20b)
+    if groq_key:
+        for model in ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
+            try:
+                logger.info(f"Querying Groq Cloud API using model={model}...")
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    res = await client.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {groq_key}",
+                            "Content-Type": "application/json"
+                        },
+                        json={
+                            "model": model,
+                            "messages": [
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": prompt}
+                            ],
+                            "temperature": 0.7
+                        }
+                    )
+                    if res.status_code == 200:
+                        data = res.json()
+                        text = data["choices"][0]["message"]["content"].strip()
+                        if text.startswith('"') and text.endswith('"'):
+                            text = text[1:-1]
+                        logger.info(f"Successfully received response from Groq Cloud ({model}).")
+                        return text, "Groq Cloud"
+                    else:
+                        logger.warning(f"Groq API model {model} returned status {res.status_code}: {res.text[:150]}")
+            except Exception as e:
+                logger.warning(f"Error querying Groq API with {model}: {e}")
+
+    # 3. Try xAI API
+    if xai_key:
+        try:
+            logger.info("Querying xAI API...")
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                res = await client.post(
+                    "https://api.x.ai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {xai_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": "grok-beta",
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": prompt}
+                        ],
+                        "temperature": 0.7
+                    }
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    text = data["choices"][0]["message"]["content"].strip()
+                    if text.startswith('"') and text.endswith('"'):
+                        text = text[1:-1]
+                    logger.info("Successfully received response from xAI.")
+                    return text, "xAI Grok"
+        except Exception as e:
+            logger.warning(f"Error querying xAI API: {e}")
+
+    return None, None
+
 @app.get("/practice/generate")
 async def generate_practice_text(
     topic: Optional[str] = "General Communication",
@@ -620,49 +733,19 @@ async def generate_practice_text(
     elif length == "long_paragraph":
         length_desc = "one extended paragraph or two of about 100-150 words"
 
-    api_key = os.getenv("XAI_API_KEY") or os.getenv("GROK_API_KEY")
-    if api_key:
-        is_groq = api_key.startswith("gsk_")
-        endpoint = "https://api.groq.com/openai/v1/chat/completions" if is_groq else "https://api.x.ai/v1/chat/completions"
-        model = "llama-3.3-70b-versatile" if is_groq else "grok-beta"
-        source_name = "Groq Cloud" if is_groq else "Grok AI"
+    prompt = (
+        f"You are a helpful speech therapist assistant. Generate a speech practice text "
+        f"about the topic '{topic}'. The text must be exactly {length_desc}.{focus_guidelines} "
+        f"Ensure the text is natural, engaging, and contains vocabulary relevant to the topic. "
+        f"Do not include any intro, outro, titles, quotes, markdown formatting, or metadata. Output ONLY the raw text to be read aloud."
+    )
 
-        logger.info(f"Querying {source_name} to generate practice text for topic={topic}, length={length}, exercise={exercise_id}...")
-        prompt = (
-            f"You are a helpful speech therapist assistant. Generate a speech practice text "
-            f"about the topic '{topic}'. The text must be exactly {length_desc}.{focus_guidelines} "
-            f"Ensure the text is natural, engaging, and contains vocabulary relevant to the topic. "
-            f"Do not include any intro, outro, titles, quotes, markdown formatting, or metadata. Output ONLY the raw text to be read aloud."
-        )
-        
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await client.post(
-                    endpoint,
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": model,
-                        "messages": [
-                            {"role": "system", "content": "You are a professional speech therapist assistant. Output raw practice text only."},
-                            {"role": "user", "content": prompt}
-                        ],
-                        "temperature": 0.7
-                    }
-                )
-                if response.status_code == 200:
-                    data = response.json()
-                    generated_text = data["choices"][0]["message"]["content"].strip()
-                    if generated_text.startswith('"') and generated_text.endswith('"'):
-                        generated_text = generated_text[1:-1]
-                    logger.info(f"Successfully generated text via {source_name} API.")
-                    return {"text": generated_text, "source": source_name}
-                else:
-                    logger.error(f"{source_name} API returned error status {response.status_code}: {response.text}")
-        except Exception as e:
-            logger.error(f"Failed to fetch from {source_name}: {e}")
+    generated_text, source_name = await query_llm(
+        prompt=prompt,
+        system_prompt="You are a professional speech therapist assistant. Output raw practice text only."
+    )
+    if generated_text:
+        return {"text": generated_text, "source": source_name}
 
     logger.info("Using local template generator fallback.")
     fallback_templates = {
@@ -1053,54 +1136,21 @@ async def analyze_speech(
             recommended_exercises.append("advanced_impromptu_speaking")
 
         # AI Speech Pathologist Personalized Evaluation
-        ai_pathologist_feedback = ""
-        api_key = os.getenv("XAI_API_KEY") or os.getenv("GROK_API_KEY")
-        if api_key:
-            is_groq = api_key.startswith("gsk_")
-            endpoint = "https://api.groq.com/openai/v1/chat/completions" if is_groq else "https://api.x.ai/v1/chat/completions"
-            model = "llama-3.3-70b-versatile" if is_groq else "grok-beta"
-            source_name = "Groq Cloud" if is_groq else "Grok AI"
-
-            logger.info("Querying AI for personalized speech pathologist evaluation...")
-            prompt = (
-                "You are an expert speech-language pathologist. Review this speech session statistics:\n"
-                f"Spoken text: \"{transcript}\"\n"
-                f"Speed: {wpm} WPM\n"
-                f"Filler words used: {filler_count} ({', '.join(filler_words_found) if filler_words_found else 'none'})\n"
-                f"Hesitations/stammers: {stammer_events} instances\n"
-                f"Gaps of silence: {long_pauses} pauses\n\n"
-                "Write a warm, professional, encouraging, and highly specific 3-sentence evaluation report. "
-                "Highlight one key strength and one actionable speaking tip based on their transcript and pace. "
-                "Address the user directly. Do not include greetings, introductions, headings, or quotes."
-            )
-            
-            try:
-                async with httpx.AsyncClient(timeout=15.0) as client:
-                    response = await client.post(
-                        endpoint,
-                        headers={
-                            "Authorization": f"Bearer {api_key}",
-                            "Content-Type": "application/json"
-                        },
-                        json={
-                            "model": model,
-                            "messages": [
-                                {"role": "system", "content": "You are a professional speech pathologist writer. Write exactly three sentences of encouraging feedback directly addressing the speaker."},
-                                {"role": "user", "content": prompt}
-                            ],
-                            "temperature": 0.7
-                        }
-                    )
-                    if response.status_code == 200:
-                        data = response.json()
-                        ai_pathologist_feedback = data["choices"][0]["message"]["content"].strip()
-                        if ai_pathologist_feedback.startswith('"') and ai_pathologist_feedback.endswith('"'):
-                            ai_pathologist_feedback = ai_pathologist_feedback[1:-1]
-                        logger.info("Successfully fetched AI Speech Pathologist feedback.")
-                    else:
-                        logger.error(f"Failed to fetch AI feedback (status {response.status_code}): {response.text}")
-            except Exception as e:
-                logger.error(f"Error calling LLM for pathologist feedback: {e}")
+        prompt = (
+            "You are an expert speech-language pathologist. Review this speech session statistics:\n"
+            f"Spoken text: \"{transcript}\"\n"
+            f"Speed: {wpm} WPM\n"
+            f"Filler words used: {filler_count} ({', '.join(filler_words_found) if filler_words_found else 'none'})\n"
+            f"Hesitations/stammers: {stammer_events} instances\n"
+            f"Gaps of silence: {long_pauses} pauses\n\n"
+            "Write a warm, professional, encouraging, and highly specific 3-sentence evaluation report. "
+            "Highlight one key strength and one actionable speaking tip based on their transcript and pace. "
+            "Address the user directly. Do not include greetings, introductions, headings, or quotes."
+        )
+        ai_pathologist_feedback, source_name = await query_llm(
+            prompt=prompt,
+            system_prompt="You are a professional speech pathologist writer. Write exactly three sentences of encouraging feedback directly addressing the speaker."
+        )
 
         if not ai_pathologist_feedback:
             # Fallback evaluation
