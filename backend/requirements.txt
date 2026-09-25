@@ -9,3 +9,7 @@ static-ffmpeg
 httpx
 edge-tts
 python-dotenv
+opencv-python
+mediapipe
+librosa
+soundfile
