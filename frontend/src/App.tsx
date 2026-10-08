@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Mic, Square, Play, CheckCircle, AlertCircle, Sparkles, BookOpen, BarChart3, HelpCircle, Activity, Flame, History, AlertTriangle, LogIn, LogOut, UserPlus, X, Search, RefreshCw, LayoutDashboard, Compass, Volume2, Video as VideoIcon, TrendingUp, TrendingDown, Award, Target, Zap, ShieldCheck, Layers, Gauge } from 'lucide-react';
+import { Mic, Square, Play, CheckCircle, AlertCircle, Sparkles, BookOpen, BarChart3, HelpCircle, Activity, Flame, History, AlertTriangle, LogIn, LogOut, UserPlus, X, Search, RefreshCw, LayoutDashboard, Compass, Volume2, Video as VideoIcon, TrendingUp, TrendingDown, Award, Target, ShieldCheck, Layers, Gauge } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { LineChart, Line, AreaChart, Area, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LabelList, Legend, ReferenceArea, ReferenceLine } from 'recharts';
+import { LineChart, Line, AreaChart, Area, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceArea, ReferenceLine } from 'recharts';
 import './App.css';
 import { VideoAnalysisModule } from './modules/video/VideoAnalysisModule';
 
@@ -129,8 +129,8 @@ interface Exercise {
 
 interface SessionRecord {
   session_id: string;
-  type: 'practice' | 'analysis' | 'exercise';
-  session_category?: 'practice' | 'analysis' | 'exercise';
+  type: 'practice' | 'analysis' | 'exercise' | 'video';
+  session_category?: 'practice' | 'analysis' | 'exercise' | 'video';
   created_at: string;
   spoken_text?: string;
   target_text?: string;
@@ -1236,22 +1236,22 @@ function App() {
 
     const c_fl = (recent_fl / 10.0) * 30.0;
     const c_acc = (recent_acc / 100.0) * 25.0;
-    const lastSub = chrono[chrono.length - 1]?.sub_scores || {};
-    const c_pause = Math.min(20, ((lastSub.pause_score || 7) + (lastSub.stammer_score || 7)) / 20 * 20);
-    const c_filler = Math.min(15, ((lastSub.filler_score || 7) / 10) * 15);
+    const lastSub = chrono[chrono.length - 1]?.sub_scores;
+    const c_pause = Math.min(20, ((lastSub?.pause_score ?? 7) + (lastSub?.stammer_score ?? 7)) / 20 * 20);
+    const c_filler = Math.min(15, ((lastSub?.filler_score ?? 7) / 10) * 15);
     const c_streak = Math.min(10, (streakCount / 7.0) * 10);
     const mastery_score = Math.min(100, Math.max(15, Math.round(c_fl + c_acc + c_pause + c_filler + c_streak)));
 
     const tier = mastery_score >= 85 ? 'Master Speaker' : mastery_score >= 70 ? 'Proficient' : mastery_score >= 50 ? 'Developing' : 'Foundational';
     const label = mastery_score >= 85 ? 'Articulate & Highly Resilient' : mastery_score >= 70 ? 'Confident & Fluid Cadence' : mastery_score >= 50 ? 'Consistent Progress & Clarity' : 'Building Rhythm & Breath Control';
 
-    const firstSub = chrono[0]?.sub_scores || {};
+    const firstSub = chrono[0]?.sub_scores;
     const radar_data = [
       { dimension: 'Articulation', baseline: Number((base_acc / 10).toFixed(1)), current: Number((recent_acc / 10).toFixed(1)), fullMark: 10 },
       { dimension: 'Pacing & Rhythm', baseline: Math.max(3, Number((10 - Math.abs((wpms[0] || 125) - 135) / 8).toFixed(1))), current: Math.max(3, Number((10 - Math.abs(recent_wpm - 135) / 8).toFixed(1))), fullMark: 10 },
-      { dimension: 'Pause Control', baseline: Number(firstSub.pause_score || 6), current: Number(lastSub.pause_score || 8), fullMark: 10 },
-      { dimension: 'Phonetic Clarity', baseline: Number(firstSub.clarity_score || 6.5), current: Number(lastSub.clarity_score || 8.5), fullMark: 10 },
-      { dimension: 'Filler Resistance', baseline: Number(firstSub.filler_score || 5.5), current: Number(lastSub.filler_score || 8), fullMark: 10 },
+      { dimension: 'Pause Control', baseline: Number(firstSub?.pause_score ?? 6), current: Number(lastSub?.pause_score ?? 8), fullMark: 10 },
+      { dimension: 'Phonetic Clarity', baseline: Number(firstSub?.clarity_score ?? 6.5), current: Number(lastSub?.clarity_score ?? 8.5), fullMark: 10 },
+      { dimension: 'Filler Resistance', baseline: Number(firstSub?.filler_score ?? 5.5), current: Number(lastSub?.filler_score ?? 8), fullMark: 10 },
     ];
 
     let ema = scores[0] || 0;
@@ -1312,11 +1312,6 @@ function App() {
     };
   }, [analyticsData, sessionHistory, streakCount]);
 
-  // Backward compatible helpers for dashboard
-  const analysisSessions = sessionHistory.filter(s => s.session_category === 'analysis' || s.type === 'analysis');
-  const avgFluency = analysisSessions.length > 0
-    ? (analysisSessions.reduce((acc, curr) => acc + (curr.final_score ?? 0), 0) / analysisSessions.length).toFixed(1)
-    : '0.0';
 
   // Filtered exercises list
   const filteredExercises = exercisesList.filter(ex => 
@@ -1761,7 +1756,7 @@ function App() {
                       </div>
                       <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
                         <button
-                          onClick={() => playEdgeLikeTTS(item.word, 0.85)}
+                          onClick={() => speakText(item.word, 0.85)}
                           className="chart-switcher-btn"
                           style={{ flex: 1, padding: '5px 8px', fontSize: '11px', justifyContent: 'center', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }}
                           title="Listen to standard pronunciation"
