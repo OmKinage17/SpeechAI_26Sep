@@ -1084,6 +1084,239 @@ def get_exercises():
         logger.error(f"Error fetching exercises: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+def compute_user_analytics(sessions: List[Dict[str, Any]], streak_count: int = 0) -> Dict[str, Any]:
+    """
+    Computes statistical speech analytics across historical practice & analysis sessions.
+    - Chronological timeline tracking
+    - Baseline (first 3 sessions) vs Recent (last 3 sessions) comparisons
+    - % improvements for Fluency, Accuracy, Filler reduction, and Pacing
+    - OLS linear regression trajectory slope
+    - Compound Speech Mastery Index (0-100)
+    - 5-dimension radar competency comparison
+    - Weak words mastery tracker
+    """
+    if not sessions:
+        return {
+            "has_data": False,
+            "total_sessions": 0,
+            "streak_count": streak_count,
+            "fluency": {"current": 0.0, "baseline": 0.0, "pct_change": 0.0, "slope": 0.0, "status": "No practice logs yet"},
+            "accuracy": {"current": 0.0, "baseline": 0.0, "pct_change": 0.0},
+            "fillers": {"current_fpm": 0.0, "baseline_fpm": 0.0, "pct_reduction": 0.0},
+            "pacing": {"current_wpm": 0.0, "status": "No data"},
+            "mastery_index": {"score": 0, "tier": "Foundational", "label": "Begin Practice"},
+            "radar_data": [],
+            "timeline": [],
+            "weak_words": []
+        }
+
+    # Chronological sort (oldest to newest)
+    chrono = sorted(sessions, key=lambda s: str(s.get("created_at", "")))
+    n = len(chrono)
+    k = min(3, n)
+
+    # 1. Fluency scores
+    scores = []
+    for s in chrono:
+        score = s.get("final_score")
+        if score is None:
+            score = s.get("pronunciation_score", 0.0)
+        try:
+            scores.append(float(score or 0.0))
+        except (ValueError, TypeError):
+            scores.append(0.0)
+
+    base_fluency = round(sum(scores[:k]) / k, 1)
+    recent_fluency = round(sum(scores[-k:]) / k, 1)
+    fluency_pct = round(((recent_fluency - base_fluency) / base_fluency) * 100, 1) if base_fluency > 0 else 0.0
+
+    # Ordinary Least Squares (OLS) slope
+    slope = 0.0
+    if n >= 2:
+        x_bar = (n - 1) / 2.0
+        y_bar = sum(scores) / n
+        num = sum((i - x_bar) * (scores[i] - y_bar) for i in range(n))
+        den = sum((i - x_bar) ** 2 for i in range(n))
+        slope = round(num / den, 3) if den != 0 else 0.0
+
+    if slope > 0.12:
+        fluency_status = "Accelerating Progress"
+    elif slope < -0.12:
+        fluency_status = "Needs Targeted Drills"
+    else:
+        fluency_status = "Steady Cadence"
+
+    # 2. Pronunciation Accuracy (% derived from WER or pronunciation_score)
+    accuracies = []
+    for s in chrono:
+        wer = s.get("word_error_rate")
+        if wer is not None:
+            try:
+                acc = max(0.0, min(100.0, (1.0 - float(wer)) * 100.0))
+            except (ValueError, TypeError):
+                acc = 75.0
+        elif s.get("pronunciation_score") is not None:
+            try:
+                acc = min(100.0, float(s["pronunciation_score"]) * 10.0)
+            except (ValueError, TypeError):
+                acc = 75.0
+        else:
+            try:
+                acc = min(100.0, float(s.get("final_score", 7.0)) * 10.0)
+            except (ValueError, TypeError):
+                acc = 70.0
+        accuracies.append(round(acc, 1))
+
+    base_acc = round(sum(accuracies[:k]) / k, 1)
+    recent_acc = round(sum(accuracies[-k:]) / k, 1)
+    acc_pct = round(((recent_acc - base_acc) / max(1.0, base_acc)) * 100, 1)
+
+    # 3. Fillers (per minute rate)
+    fpm_list = []
+    for s in chrono:
+        try:
+            fc = float(s.get("filler_count", 0))
+            dur_min = max(0.15, float(s.get("duration_sec", 60.0)) / 60.0)
+            fpm_list.append(round(fc / dur_min, 1))
+        except (ValueError, TypeError):
+            fpm_list.append(0.0)
+
+    base_fpm = round(sum(fpm_list[:k]) / k, 1)
+    recent_fpm = round(sum(fpm_list[-k:]) / k, 1)
+    filler_red_pct = round(((base_fpm - recent_fpm) / base_fpm) * 100, 1) if base_fpm > 0 else 0.0
+
+    # 4. Pacing (WPM)
+    wpm_list = []
+    for s in chrono:
+        try:
+            wpm_list.append(float(s.get("wpm") or 0.0))
+        except (ValueError, TypeError):
+            wpm_list.append(0.0)
+
+    valid_wpms = [w for w in wpm_list if w > 0]
+    recent_wpm = round(sum(valid_wpms[-k:]) / len(valid_wpms[-k:]), 1) if valid_wpms else 130.0
+
+    if 120 <= recent_wpm <= 150:
+        pacing_status = "Optimal Target Cadence (120-150 WPM)"
+    elif recent_wpm < 120:
+        pacing_status = "Deliberate / Slow Pace (<120 WPM)"
+    else:
+        pacing_status = "Brisk / Rapid Pace (>150 WPM)"
+
+    # 5. Compound Speech Mastery Index (CSMI, 0-100)
+    c_fl = (recent_fluency / 10.0) * 30.0
+    c_acc = (recent_acc / 100.0) * 25.0
+    recent_sub = chrono[-1].get("sub_scores", {}) if isinstance(chrono[-1].get("sub_scores"), dict) else {}
+    c_pause = min(20.0, (float(recent_sub.get("pause_score", 7.0)) + float(recent_sub.get("stammer_score", 7.0))) / 20.0 * 20.0)
+    c_filler = min(15.0, (float(recent_sub.get("filler_score", 7.0)) / 10.0) * 15.0)
+    c_streak = min(10.0, (streak_count / 7.0) * 10.0)
+    mastery_score = int(min(100, max(15, round(c_fl + c_acc + c_pause + c_filler + c_streak))))
+
+    if mastery_score >= 85:
+        tier, label = "Master Speaker", "Articulate & Highly Resilient"
+    elif mastery_score >= 70:
+        tier, label = "Proficient", "Confident & Fluid Cadence"
+    elif mastery_score >= 50:
+        tier, label = "Developing", "Consistent Progress & Clarity"
+    else:
+        tier, label = "Foundational", "Building Rhythm & Breath Control"
+
+    # 6. 5-Dimension Radar Competency (0-10 Scale)
+    base_sub = chrono[0].get("sub_scores", {}) if isinstance(chrono[0].get("sub_scores"), dict) else {}
+    radar_data = [
+        {"dimension": "Articulation", "baseline": round(base_acc / 10.0, 1), "current": round(recent_acc / 10.0, 1), "fullMark": 10},
+        {"dimension": "Pacing & Rhythm", "baseline": max(3.0, round(10.0 - abs((wpm_list[0] if wpm_list else 125) - 135) / 8.0, 1)), "current": max(3.0, round(10.0 - abs(recent_wpm - 135) / 8.0, 1)), "fullMark": 10},
+        {"dimension": "Pause Control", "baseline": float(base_sub.get("pause_score", 6.0)), "current": float(recent_sub.get("pause_score", 8.0)), "fullMark": 10},
+        {"dimension": "Phonetic Clarity", "baseline": float(base_sub.get("clarity_score", 6.5)), "current": float(recent_sub.get("clarity_score", 8.5)), "fullMark": 10},
+        {"dimension": "Filler Resistance", "baseline": float(base_sub.get("filler_score", 5.5)), "current": float(recent_sub.get("filler_score", 8.0)), "fullMark": 10},
+    ]
+
+    # 7. Timeline points with EMA (Exponential Moving Average)
+    ema = scores[0] if scores else 0.0
+    alpha = 0.35
+    timeline = []
+    for idx, s in enumerate(chrono):
+        sc = scores[idx]
+        ema = alpha * sc + (1 - alpha) * ema
+        date_raw = s.get("created_at", "")
+        try:
+            dt = datetime.fromisoformat(str(date_raw).replace("Z", "+00:00"))
+            date_label = dt.strftime("%b %d, %H:%M")
+        except Exception:
+            date_label = f"Sess #{idx + 1}"
+
+        timeline.append({
+            "name": date_label,
+            "session_id": str(s.get("session_id") or s.get("_id") or f"sess_{idx}"),
+            "type": s.get("type", "analysis"),
+            "fluency": sc,
+            "ema_trend": round(ema, 2),
+            "accuracy": accuracies[idx],
+            "wpm": wpm_list[idx],
+            "fillers": int(s.get("filler_count", 0)),
+            "stammers": int(s.get("stammer_events", 0)),
+            "pauses": int(s.get("long_pauses", 0)),
+        })
+
+    # 8. Weak words & Pronunciation Shelf
+    word_freq = {}
+    last_mismatches = set(m.get("expected", "").lower() for m in chrono[-1].get("mismatched_words", [])) if chrono[-1].get("mismatched_words") else set()
+    for s in chrono:
+        for m in s.get("mismatched_words", []):
+            w = m.get("expected", "").strip().lower()
+            if w and len(w) > 2:
+                if w not in word_freq:
+                    word_freq[w] = {"word": w, "count": 0, "spoken_variants": set()}
+                word_freq[w]["count"] += 1
+                if m.get("spoken"):
+                    word_freq[w]["spoken_variants"].add(m.get("spoken"))
+
+    weak_words = []
+    for w, data in sorted(word_freq.items(), key=lambda x: x[1]["count"], reverse=True)[:8]:
+        is_still_flagged = w in last_mismatches
+        status = "needs_drill" if is_still_flagged else "mastered"
+        weak_words.append({
+            "word": w,
+            "count": data["count"],
+            "spoken_as": list(data["spoken_variants"])[:2],
+            "status": status
+        })
+
+    return {
+        "has_data": True,
+        "total_sessions": n,
+        "streak_count": streak_count,
+        "fluency": {
+            "current": recent_fluency,
+            "baseline": base_fluency,
+            "pct_change": fluency_pct,
+            "slope": slope,
+            "status": fluency_status
+        },
+        "accuracy": {
+            "current": recent_acc,
+            "baseline": base_acc,
+            "pct_change": acc_pct
+        },
+        "fillers": {
+            "current_fpm": recent_fpm,
+            "baseline_fpm": base_fpm,
+            "pct_reduction": filler_red_pct
+        },
+        "pacing": {
+            "current_wpm": recent_wpm,
+            "status": pacing_status
+        },
+        "mastery_index": {
+            "score": mastery_score,
+            "tier": tier,
+            "label": label
+        },
+        "radar_data": radar_data,
+        "timeline": timeline,
+        "weak_words": weak_words
+    }
+
 @app.get("/reports/{user_id}")
 def get_user_reports(user_id: str, authorization: Optional[str] = Header(None)):
     if db is None:
@@ -1108,19 +1341,40 @@ def get_user_reports(user_id: str, authorization: Optional[str] = Header(None)):
             s["type"] = s.get("session_category", "analysis")
             s["created_at"] = serialize_datetime(s["created_at"]) if isinstance(s["created_at"], datetime) else s["created_at"]
 
-        combined = practice_sessions + analysis_sessions
+        video_cursor = db["video_sessions"].find({"user_id": target_user_id, "status": "COMPLETED"}).sort("created_at", -1)
+        video_sessions = list(video_cursor)
+        for s in video_sessions:
+            s["_id"] = str(s.get("_id", s.get("job_id", "")))
+            s["type"] = "video"
+            if "scores" in s and "overall" in s["scores"]:
+                s["final_score"] = s["scores"]["overall"]
+            if "speech" in s:
+                s["transcript"] = s["speech"].get("transcript", "")
+                s["wpm"] = s["speech"].get("wpm", 0)
+                s["filler_count"] = s["speech"].get("filler_count", 0)
+            s["created_at"] = serialize_datetime(s["created_at"]) if isinstance(s["created_at"], datetime) else str(s.get("created_at", ""))
+
+        combined = practice_sessions + analysis_sessions + video_sessions
         combined.sort(key=lambda x: x.get("created_at", ""), reverse=True)
         
         user_record = db["users"].find_one({"_id": target_user_id})
         streak = user_record.get("streak_count", 0) if user_record else 0
 
+        analytics = compute_user_analytics(combined, streak)
+
         return {
             "streak_count": streak,
-            "sessions": combined
+            "sessions": combined,
+            "analytics": analytics
         }
     except Exception as e:
         logger.error(f"Error fetching user reports: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/reports/{user_id}/analytics")
+def get_user_analytics_endpoint(user_id: str, authorization: Optional[str] = Header(None)):
+    data = get_user_reports(user_id=user_id, authorization=authorization)
+    return data.get("analytics", {})
 
 def align_words(target_words: List[str], spoken_words: List[str]) -> List[Dict[str, Any]]:
     """

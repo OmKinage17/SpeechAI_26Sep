@@ -1,11 +1,67 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Mic, Square, Play, CheckCircle, AlertCircle, Sparkles, BookOpen, BarChart3, HelpCircle, Activity, Flame, History, AlertTriangle, LogIn, LogOut, UserPlus, X, Search, RefreshCw, LayoutDashboard, Compass, Volume2, Video as VideoIcon } from 'lucide-react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { Mic, Square, Play, CheckCircle, AlertCircle, Sparkles, BookOpen, BarChart3, HelpCircle, Activity, Flame, History, AlertTriangle, LogIn, LogOut, UserPlus, X, Search, RefreshCw, LayoutDashboard, Compass, Volume2, Video as VideoIcon, TrendingUp, TrendingDown, Award, Target, Zap, ShieldCheck, Layers, Gauge } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LabelList } from 'recharts';
+import { LineChart, Line, AreaChart, Area, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LabelList, Legend, ReferenceArea, ReferenceLine } from 'recharts';
 import './App.css';
 import { VideoAnalysisModule } from './modules/video/VideoAnalysisModule';
 
 // Type definitions
+interface AnalyticsData {
+  has_data: boolean;
+  total_sessions: number;
+  streak_count: number;
+  fluency: {
+    current: number;
+    baseline: number;
+    pct_change: number;
+    slope: number;
+    status: string;
+  };
+  accuracy: {
+    current: number;
+    baseline: number;
+    pct_change: number;
+  };
+  fillers: {
+    current_fpm: number;
+    baseline_fpm: number;
+    pct_reduction: number;
+  };
+  pacing: {
+    current_wpm: number;
+    status: string;
+  };
+  mastery_index: {
+    score: number;
+    tier: string;
+    label: string;
+  };
+  radar_data: Array<{
+    dimension: string;
+    baseline: number;
+    current: number;
+    fullMark: number;
+  }>;
+  timeline: Array<{
+    name: string;
+    session_id: string;
+    type: string;
+    fluency: number;
+    ema_trend: number;
+    accuracy: number;
+    wpm: number;
+    fillers: number;
+    stammers: number;
+    pauses: number;
+  }>;
+  weak_words: Array<{
+    word: string;
+    count: number;
+    spoken_as: string[];
+    status: 'mastered' | 'needs_drill';
+  }>;
+}
+
 interface MismatchedWord {
   expected: string;
   spoken: string;
@@ -435,8 +491,12 @@ function App() {
   const [exerciseSearch, setExerciseSearch] = useState('');
   
   // Swappable history tab & detailed expander state
-  const [historyTab, setHistoryTab] = useState<'analysis' | 'exercise'>('analysis');
+  const [historyTab, setHistoryTab] = useState<'analysis' | 'exercise' | 'video'>('analysis');
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
+
+  // Analytics & Progress Tracking state
+  const [analyticsData, setAnalyticsData] = useState<AnalyticsData | null>(null);
+  const [chartMetricMode, setChartMetricMode] = useState<'fluency' | 'disfluency' | 'pacing'>('fluency');
 
   // Groq AI practice text generator states
   const [aiTopic, setAiTopic] = useState('General Communication');
@@ -562,10 +622,14 @@ function App() {
       if (res.ok) {
         const data = await res.json();
         setStreakCount(data.streak_count);
+        if (data.analytics) {
+          setAnalyticsData(data.analytics);
+        }
         const normalizedSessions = data.sessions.map((session: any) => {
           const hasExerciseMeta = session.session_category === 'exercise' || (session.exercise_id && session.exercise_id !== 'none') || !!session.exercise_title;
           const inferredType = session.type
-            || (session.session_category === 'exercise' ? 'exercise'
+            || (session.session_category === 'video' ? 'video'
+              : session.session_category === 'exercise' ? 'exercise'
               : session.session_category === 'analysis' ? 'analysis'
               : hasExerciseMeta ? 'exercise'
               : 'analysis');
@@ -580,6 +644,7 @@ function App() {
         if (!availableTypes.has(historyTab)) {
           if (availableTypes.has('analysis')) setHistoryTab('analysis');
           else if (availableTypes.has('exercise')) setHistoryTab('exercise');
+          else if (availableTypes.has('video')) setHistoryTab('video');
         }
       }
     } catch (e) {
@@ -1093,20 +1158,161 @@ function App() {
     }
   };
 
-  // Recharts Fluency Progress Chart data formulation (Scale 0-10)
-  const fluencyChartData = [...sessionHistory]
-    .reverse()
-    .filter(s => s.session_category === 'analysis' || s.type === 'analysis')
-    .map((session, idx) => {
-      const date = new Date(session.created_at);
-      const label = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  // Effective Analytics calculation (uses backend analyticsData if available, otherwise local derivation)
+  const effectiveAnalytics: AnalyticsData = useMemo(() => {
+    if (analyticsData && analyticsData.has_data) {
+      return analyticsData;
+    }
+    const n = sessionHistory.length;
+    if (n === 0) {
       return {
-        name: `${label} - f${idx}`,
-        Score: session.final_score ?? 0,
+        has_data: false,
+        total_sessions: 0,
+        streak_count: streakCount,
+        fluency: { current: 0.0, baseline: 0.0, pct_change: 0.0, slope: 0.0, status: 'No practice logs yet' },
+        accuracy: { current: 0.0, baseline: 0.0, pct_change: 0.0 },
+        fillers: { current_fpm: 0.0, baseline_fpm: 0.0, pct_reduction: 0.0 },
+        pacing: { current_wpm: 0.0, status: 'No data' },
+        mastery_index: { score: 15, tier: 'Foundational', label: 'Begin Practice' },
+        radar_data: [
+          { dimension: 'Articulation', baseline: 5, current: 5, fullMark: 10 },
+          { dimension: 'Pacing & Rhythm', baseline: 5, current: 5, fullMark: 10 },
+          { dimension: 'Pause Control', baseline: 5, current: 5, fullMark: 10 },
+          { dimension: 'Phonetic Clarity', baseline: 5, current: 5, fullMark: 10 },
+          { dimension: 'Filler Resistance', baseline: 5, current: 5, fullMark: 10 },
+        ],
+        timeline: [],
+        weak_words: [],
+      };
+    }
+
+    const chrono = [...sessionHistory].reverse();
+    const k = Math.min(3, n);
+    const scores = chrono.map(s => Number(s.final_score ?? s.pronunciation_score ?? 0));
+    const base_fl = Number((scores.slice(0, k).reduce((a, b) => a + b, 0) / k).toFixed(1));
+    const recent_fl = Number((scores.slice(-k).reduce((a, b) => a + b, 0) / k).toFixed(1));
+    const fl_pct = base_fl > 0 ? Number((((recent_fl - base_fl) / base_fl) * 100).toFixed(1)) : 0;
+
+    let slope = 0;
+    if (n >= 2) {
+      const x_bar = (n - 1) / 2.0;
+      const y_bar = scores.reduce((a, b) => a + b, 0) / n;
+      let num = 0;
+      let den = 0;
+      for (let i = 0; i < n; i++) {
+        num += (i - x_bar) * (scores[i] - y_bar);
+        den += Math.pow(i - x_bar, 2);
+      }
+      slope = den !== 0 ? Number((num / den).toFixed(3)) : 0;
+    }
+
+    const fl_status = slope > 0.12 ? 'Accelerating Progress' : slope < -0.12 ? 'Needs Targeted Drills' : 'Steady Cadence';
+
+    const accuracies = chrono.map(s => {
+      if (s.word_error_rate !== undefined) return Math.max(0, Math.min(100, (1 - s.word_error_rate) * 100));
+      if (s.pronunciation_score !== undefined) return Math.min(100, s.pronunciation_score * 10);
+      return Math.min(100, (s.final_score ?? 7) * 10);
+    });
+    const base_acc = Number((accuracies.slice(0, k).reduce((a, b) => a + b, 0) / k).toFixed(1));
+    const recent_acc = Number((accuracies.slice(-k).reduce((a, b) => a + b, 0) / k).toFixed(1));
+    const acc_pct = Number((((recent_acc - base_acc) / Math.max(1, base_acc)) * 100).toFixed(1));
+
+    const fpms = chrono.map(s => {
+      const fc = s.filler_count || 0;
+      const dur = Math.max(0.15, (s.duration_sec || 60) / 60);
+      return fc / dur;
+    });
+    const base_fpm = Number((fpms.slice(0, k).reduce((a, b) => a + b, 0) / k).toFixed(1));
+    const recent_fpm = Number((fpms.slice(-k).reduce((a, b) => a + b, 0) / k).toFixed(1));
+    const fpm_red_pct = base_fpm > 0 ? Number((((base_fpm - recent_fpm) / base_fpm) * 100).toFixed(1)) : 0;
+
+    const wpms = chrono.map(s => s.wpm || 130);
+    const recent_wpm = Number((wpms.slice(-k).reduce((a, b) => a + b, 0) / k).toFixed(1));
+    const pacing_status = recent_wpm >= 120 && recent_wpm <= 150
+      ? 'Optimal Target Cadence (120-150 WPM)'
+      : recent_wpm < 120
+      ? 'Deliberate / Slow Pace (<120 WPM)'
+      : 'Brisk / Rapid Pace (>150 WPM)';
+
+    const c_fl = (recent_fl / 10.0) * 30.0;
+    const c_acc = (recent_acc / 100.0) * 25.0;
+    const lastSub = chrono[chrono.length - 1]?.sub_scores || {};
+    const c_pause = Math.min(20, ((lastSub.pause_score || 7) + (lastSub.stammer_score || 7)) / 20 * 20);
+    const c_filler = Math.min(15, ((lastSub.filler_score || 7) / 10) * 15);
+    const c_streak = Math.min(10, (streakCount / 7.0) * 10);
+    const mastery_score = Math.min(100, Math.max(15, Math.round(c_fl + c_acc + c_pause + c_filler + c_streak)));
+
+    const tier = mastery_score >= 85 ? 'Master Speaker' : mastery_score >= 70 ? 'Proficient' : mastery_score >= 50 ? 'Developing' : 'Foundational';
+    const label = mastery_score >= 85 ? 'Articulate & Highly Resilient' : mastery_score >= 70 ? 'Confident & Fluid Cadence' : mastery_score >= 50 ? 'Consistent Progress & Clarity' : 'Building Rhythm & Breath Control';
+
+    const firstSub = chrono[0]?.sub_scores || {};
+    const radar_data = [
+      { dimension: 'Articulation', baseline: Number((base_acc / 10).toFixed(1)), current: Number((recent_acc / 10).toFixed(1)), fullMark: 10 },
+      { dimension: 'Pacing & Rhythm', baseline: Math.max(3, Number((10 - Math.abs((wpms[0] || 125) - 135) / 8).toFixed(1))), current: Math.max(3, Number((10 - Math.abs(recent_wpm - 135) / 8).toFixed(1))), fullMark: 10 },
+      { dimension: 'Pause Control', baseline: Number(firstSub.pause_score || 6), current: Number(lastSub.pause_score || 8), fullMark: 10 },
+      { dimension: 'Phonetic Clarity', baseline: Number(firstSub.clarity_score || 6.5), current: Number(lastSub.clarity_score || 8.5), fullMark: 10 },
+      { dimension: 'Filler Resistance', baseline: Number(firstSub.filler_score || 5.5), current: Number(lastSub.filler_score || 8), fullMark: 10 },
+    ];
+
+    let ema = scores[0] || 0;
+    const alpha = 0.35;
+    const timeline = chrono.map((s, idx) => {
+      const sc = scores[idx];
+      ema = alpha * sc + (1 - alpha) * ema;
+      const date = new Date(s.created_at);
+      const name = isNaN(date.getTime()) ? `Sess #${idx + 1}` : date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+      return {
+        name,
+        session_id: s.session_id,
+        type: s.type,
+        fluency: sc,
+        ema_trend: Number(ema.toFixed(2)),
+        accuracy: Number(accuracies[idx].toFixed(1)),
+        wpm: wpms[idx],
+        fillers: s.filler_count || 0,
+        stammers: s.stammer_events || 0,
+        pauses: s.long_pauses || 0,
       };
     });
 
-  // Calculate Dashboard Averages
+    const word_freq: Record<string, { count: number; spoken: Set<string> }> = {};
+    chrono.forEach(s => {
+      (s.mismatched_words || []).forEach(m => {
+        const w = (m.expected || '').trim().toLowerCase();
+        if (w.length > 2) {
+          if (!word_freq[w]) word_freq[w] = { count: 0, spoken: new Set() };
+          word_freq[w].count += 1;
+          if (m.spoken) word_freq[w].spoken.add(m.spoken);
+        }
+      });
+    });
+    const lastMismatches = new Set((chrono[chrono.length - 1]?.mismatched_words || []).map(m => (m.expected || '').toLowerCase()));
+    const weak_words = Object.entries(word_freq)
+      .sort((a, b) => b[1].count - a[1].count)
+      .slice(0, 8)
+      .map(([w, data]) => ({
+        word: w,
+        count: data.count,
+        spoken_as: Array.from(data.spoken).slice(0, 2),
+        status: lastMismatches.has(w) ? ('needs_drill' as const) : ('mastered' as const),
+      }));
+
+    return {
+      has_data: true,
+      total_sessions: n,
+      streak_count: streakCount,
+      fluency: { current: recent_fl, baseline: base_fl, pct_change: fl_pct, slope, status: fl_status },
+      accuracy: { current: recent_acc, baseline: base_acc, pct_change: acc_pct },
+      fillers: { current_fpm: recent_fpm, baseline_fpm: base_fpm, pct_reduction: fpm_red_pct },
+      pacing: { current_wpm: recent_wpm, status: pacing_status },
+      mastery_index: { score: mastery_score, tier, label },
+      radar_data,
+      timeline,
+      weak_words,
+    };
+  }, [analyticsData, sessionHistory, streakCount]);
+
+  // Backward compatible helpers for dashboard
   const analysisSessions = sessionHistory.filter(s => s.session_category === 'analysis' || s.type === 'analysis');
   const avgFluency = analysisSessions.length > 0
     ? (analysisSessions.reduce((acc, curr) => acc + (curr.final_score ?? 0), 0) / analysisSessions.length).toFixed(1)
@@ -1123,6 +1329,9 @@ function App() {
   const filteredHistory = sessionHistory.filter(s => {
     if (historyTab === 'exercise') {
       return s.session_category === 'exercise' || s.type === 'exercise';
+    }
+    if (historyTab === 'video') {
+      return s.session_category === 'video' || s.type === 'video';
     }
     return s.session_category === 'analysis' || s.type === 'analysis';
   });
@@ -1248,89 +1457,346 @@ function App() {
         {/* 1. DASHBOARD VIEW */}
         {activeTab === 'dashboard' && (
           <div className="view-fade">
-            <div className="dashboard-hero">
-              <h1 className="hero-title">Speech Fluency & Analytical Dashboard</h1>
-              <p className="hero-subtitle">Monitor your speech fluency scores, disfluency counts, and daily practice streaks in one place.</p>
-            </div>
-
-            <div className="dashboard-grid">
-              {/* Left Column: Stats & Streaks */}
-              <div className="dashboard-column">
-                <div className="glass-card stat-card-highlight">
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
-                    <Flame size={32} style={{ color: 'var(--secondary)', fill: 'var(--secondary)' }} />
-                    <div>
-                      <h3 style={{ fontSize: '18px', fontWeight: '700', color: 'var(--text-primary)' }}>Daily Goal Streak</h3>
-                      <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Practice every consecutive UTC day</p>
-                    </div>
-                  </div>
-                  <div style={{ fontSize: '48px', fontWeight: '800', color: 'var(--text-primary)', marginBottom: '8px' }}>
-                    {streakCount} <span style={{ fontSize: '20px', color: 'var(--text-secondary)' }}>Days</span>
-                  </div>
-                  <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-                    {streakCount > 0 ? "Fantastic! Keep up the daily practice rhythm." : "Start a speech drill to begin your daily streak!"}
+            {/* Dashboard Hero Header */}
+            <div className="dashboard-hero" style={{ marginBottom: '24px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
+                <div>
+                  <h1 className="hero-title" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <Activity size={30} style={{ color: 'var(--primary)' }} />
+                    Speech Fluency & Analytical Dashboard
+                  </h1>
+                  <p className="hero-subtitle">
+                    Longitudinal progress tracking, exponential moving averages, 5-axis competency mapping, and disfluency reduction.
                   </p>
                 </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
-                  <div className="glass-card stat-metric-box">
-                    <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Speech Fluency (Avg)</span>
-                    <div style={{ fontSize: '24px', fontWeight: 'bold', color: 'var(--primary)', marginTop: '8px' }}>{avgFluency}/10</div>
-                  </div>
-                  <div className="glass-card stat-metric-box">
-                    <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Total Fluency Sessions</span>
-                    <div style={{ fontSize: '24px', fontWeight: 'bold', color: 'var(--secondary)', marginTop: '8px' }}>{analysisSessions.length}</div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Right Column: Fluency Progress Chart */}
-              <div className="dashboard-column" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                <div className="glass-card chart-container-card">
-                  <h3 style={{ fontSize: '16px', fontWeight: '700', color: 'var(--text-primary)', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <Activity size={20} style={{ color: 'var(--primary)' }} />
-                    Module 1: Fluency Progress Trend (Scale 0-10)
-                  </h3>
-                  {analysisSessions.length === 0 ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '220px', color: 'var(--text-muted)' }}>
-                      <HelpCircle size={32} style={{ marginBottom: '10px' }} />
-                      <p style={{ fontSize: '13px' }}>No fluency analysis sessions logged yet.</p>
-                    </div>
-                  ) : (
-                    <div style={{ width: '100%', height: 220 }}>
-                      <ResponsiveContainer width="100%" height="100%">
-                        <LineChart data={fluencyChartData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                          <XAxis dataKey="name" tickFormatter={(val) => val.split(' - ')[0]} stroke="var(--text-muted)" fontSize={10} tickLine={false} />
-                          <YAxis domain={[0, 10]} ticks={[0, 2, 4, 6, 8, 10]} stroke="var(--text-muted)" fontSize={10} tickLine={false} />
-                          <Tooltip 
-                            contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)', borderRadius: 'var(--radius-sm)' }}
-                            labelStyle={{ color: 'var(--text-primary)', fontWeight: 'bold' }}
-                            labelFormatter={(label) => typeof label === 'string' ? label.split(' - ')[0] : ''}
-                            formatter={(value: any) => [`${value}/10`, 'Fluency Score']}
-                          />
-                          <Line type="monotone" dataKey="Score" stroke="var(--primary)" strokeWidth={3} activeDot={{ r: 6 }} dot={{ r: 3 }}>
-                            <LabelList dataKey="Score" position="top" style={{ fill: 'var(--text-primary)', fontSize: '10px' }} />
-                          </Line>
-                        </LineChart>
-                      </ResponsiveContainer>
-                    </div>
-                  )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <button 
+                    onClick={fetchDashboardData}
+                    className="chart-switcher-btn"
+                    style={{ border: '1px solid var(--border-color)', padding: '8px 14px', borderRadius: 'var(--radius-sm)', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
+                    title="Refresh analytics data"
+                  >
+                    <RefreshCw size={14} /> Refresh Analytics
+                  </button>
                 </div>
               </div>
             </div>
 
+            {/* Executive KPI Cards Grid */}
+            <div className="analytics-kpi-grid">
+              {/* KPI 1: Compound Speech Mastery Index */}
+              <div className="kpi-card">
+                <div className="kpi-card-header">
+                  <span className="kpi-card-title">Compound Mastery Index</span>
+                  <div className="kpi-card-icon" style={{ background: 'rgba(99, 102, 241, 0.15)', color: 'var(--primary)' }}>
+                    <Award size={18} />
+                  </div>
+                </div>
+                <div className="kpi-card-value">
+                  {effectiveAnalytics.mastery_index.score}
+                  <span className="kpi-card-denom">/ 100</span>
+                </div>
+                <div className="kpi-card-footer">
+                  <span className="badge-pct optimal">{effectiveAnalytics.mastery_index.tier}</span>
+                  <span className="kpi-subtext" style={{ fontWeight: 600 }}>{effectiveAnalytics.mastery_index.label}</span>
+                </div>
+              </div>
+
+              {/* KPI 2: Fluency Score Trajectory */}
+              <div className="kpi-card">
+                <div className="kpi-card-header">
+                  <span className="kpi-card-title">Fluency Trajectory</span>
+                  <div className="kpi-card-icon" style={{ background: 'rgba(34, 197, 94, 0.15)', color: 'var(--success)' }}>
+                    <Activity size={18} />
+                  </div>
+                </div>
+                <div className="kpi-card-value">
+                  {effectiveAnalytics.fluency.current}
+                  <span className="kpi-card-denom">/ 10</span>
+                </div>
+                <div className="kpi-card-footer">
+                  <span className={`badge-pct ${effectiveAnalytics.fluency.pct_change >= 0 ? 'positive' : 'negative'}`}>
+                    {effectiveAnalytics.fluency.pct_change >= 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+                    {effectiveAnalytics.fluency.pct_change >= 0 ? '+' : ''}{effectiveAnalytics.fluency.pct_change}%
+                  </span>
+                  <span className="kpi-subtext">Baseline: {effectiveAnalytics.fluency.baseline}/10</span>
+                </div>
+              </div>
+
+              {/* KPI 3: Pronunciation Accuracy */}
+              <div className="kpi-card">
+                <div className="kpi-card-header">
+                  <span className="kpi-card-title">Pronunciation Accuracy</span>
+                  <div className="kpi-card-icon" style={{ background: 'rgba(6, 182, 212, 0.15)', color: '#06b6d4' }}>
+                    <ShieldCheck size={18} />
+                  </div>
+                </div>
+                <div className="kpi-card-value">
+                  {effectiveAnalytics.accuracy.current}%
+                </div>
+                <div className="kpi-card-footer">
+                  <span className={`badge-pct ${effectiveAnalytics.accuracy.pct_change >= 0 ? 'positive' : 'negative'}`}>
+                    {effectiveAnalytics.accuracy.pct_change >= 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+                    {effectiveAnalytics.accuracy.pct_change >= 0 ? '+' : ''}{effectiveAnalytics.accuracy.pct_change}%
+                  </span>
+                  <span className="kpi-subtext">Baseline: {effectiveAnalytics.accuracy.baseline}%</span>
+                </div>
+              </div>
+
+              {/* KPI 4: Vocal Filler Frequency */}
+              <div className="kpi-card">
+                <div className="kpi-card-header">
+                  <span className="kpi-card-title">Vocal Filler Frequency</span>
+                  <div className="kpi-card-icon" style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b' }}>
+                    <Layers size={18} />
+                  </div>
+                </div>
+                <div className="kpi-card-value">
+                  {effectiveAnalytics.fillers.current_fpm}
+                  <span className="kpi-card-denom">/ min</span>
+                </div>
+                <div className="kpi-card-footer">
+                  <span className={`badge-pct ${effectiveAnalytics.fillers.pct_reduction >= 0 ? 'positive' : 'negative'}`}>
+                    {effectiveAnalytics.fillers.pct_reduction >= 0 ? '-' : '+'}{Math.abs(effectiveAnalytics.fillers.pct_reduction)}%
+                  </span>
+                  <span className="kpi-subtext">Baseline: {effectiveAnalytics.fillers.baseline_fpm}/min</span>
+                </div>
+              </div>
+
+              {/* KPI 5: Speaking Cadence */}
+              <div className="kpi-card">
+                <div className="kpi-card-header">
+                  <span className="kpi-card-title">Speaking Cadence</span>
+                  <div className="kpi-card-icon" style={{ background: 'rgba(139, 92, 246, 0.15)', color: 'var(--accent)' }}>
+                    <Gauge size={18} />
+                  </div>
+                </div>
+                <div className="kpi-card-value">
+                  {effectiveAnalytics.pacing.current_wpm}
+                  <span className="kpi-card-denom">WPM</span>
+                </div>
+                <div className="kpi-card-footer">
+                  <span className={`badge-pct ${effectiveAnalytics.pacing.current_wpm >= 120 && effectiveAnalytics.pacing.current_wpm <= 150 ? 'optimal' : 'neutral'}`}>
+                    {effectiveAnalytics.pacing.current_wpm >= 120 && effectiveAnalytics.pacing.current_wpm <= 150 ? 'Optimal' : effectiveAnalytics.pacing.current_wpm < 120 ? 'Slow' : 'Brisk'}
+                  </span>
+                  <span className="kpi-subtext">Target: 120-150 WPM</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Deep Analytics: Longitudinal Chart & Radar */}
+            <div className="analytics-chart-row">
+              {/* Left Column: Longitudinal Trajectory Chart */}
+              <div className="glass-card chart-container-card" style={{ display: 'flex', flexDirection: 'column' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '16px' }}>
+                  <h3 style={{ fontSize: '16px', fontWeight: '700', color: 'var(--text-primary)', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Activity size={20} style={{ color: 'var(--primary)' }} />
+                    Longitudinal Progress & Trajectory Analytics
+                  </h3>
+                  <div className="chart-switcher">
+                    <button 
+                      className={`chart-switcher-btn ${chartMetricMode === 'fluency' ? 'active' : ''}`}
+                      onClick={() => setChartMetricMode('fluency')}
+                    >
+                      <Activity size={13} /> Fluency & EMA
+                    </button>
+                    <button 
+                      className={`chart-switcher-btn ${chartMetricMode === 'disfluency' ? 'active' : ''}`}
+                      onClick={() => setChartMetricMode('disfluency')}
+                    >
+                      <AlertTriangle size={13} /> Disfluency Stack
+                    </button>
+                    <button 
+                      className={`chart-switcher-btn ${chartMetricMode === 'pacing' ? 'active' : ''}`}
+                      onClick={() => setChartMetricMode('pacing')}
+                    >
+                      <Gauge size={13} /> Cadence Band
+                    </button>
+                  </div>
+                </div>
+
+                {effectiveAnalytics.timeline.length === 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '260px', color: 'var(--text-muted)' }}>
+                    <HelpCircle size={32} style={{ marginBottom: '10px' }} />
+                    <p style={{ fontSize: '13px' }}>No session recordings logged yet. Record a practice or fluency session to view your trajectory.</p>
+                  </div>
+                ) : (
+                  <div style={{ width: '100%', height: 280 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      {chartMetricMode === 'fluency' ? (
+                        <AreaChart data={effectiveAnalytics.timeline} margin={{ top: 15, right: 15, left: -20, bottom: 0 }}>
+                          <defs>
+                            <linearGradient id="fluencyGrad" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.4} />
+                              <stop offset="95%" stopColor="var(--primary)" stopOpacity={0.0} />
+                            </linearGradient>
+                          </defs>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                          <XAxis dataKey="name" stroke="var(--text-muted)" fontSize={11} tickLine={false} />
+                          <YAxis domain={[0, 10]} ticks={[0, 2, 4, 6, 8, 10]} stroke="var(--text-muted)" fontSize={11} tickLine={false} />
+                          <Tooltip
+                            contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)', borderRadius: 'var(--radius-sm)' }}
+                            labelStyle={{ color: 'var(--text-primary)', fontWeight: 'bold' }}
+                          />
+                          <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '12px' }} />
+                          {effectiveAnalytics.fluency.baseline > 0 && (
+                            <ReferenceLine y={effectiveAnalytics.fluency.baseline} stroke="var(--text-muted)" strokeDasharray="4 4" label={{ value: `Baseline (${effectiveAnalytics.fluency.baseline})`, fill: 'var(--text-muted)', fontSize: 10, position: 'insideTopLeft' }} />
+                          )}
+                          <Area type="monotone" dataKey="fluency" name="Fluency Score (/10)" stroke="var(--primary)" strokeWidth={2.5} fillOpacity={1} fill="url(#fluencyGrad)" dot={{ r: 3 }} />
+                          <Line type="monotone" dataKey="ema_trend" name="EMA Trend (α=0.35)" stroke="#06b6d4" strokeWidth={2} strokeDasharray="3 3" dot={false} />
+                        </AreaChart>
+                      ) : chartMetricMode === 'disfluency' ? (
+                        <AreaChart data={effectiveAnalytics.timeline} margin={{ top: 15, right: 15, left: -20, bottom: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                          <XAxis dataKey="name" stroke="var(--text-muted)" fontSize={11} tickLine={false} />
+                          <YAxis stroke="var(--text-muted)" fontSize={11} tickLine={false} />
+                          <Tooltip
+                            contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)', borderRadius: 'var(--radius-sm)' }}
+                            labelStyle={{ color: 'var(--text-primary)', fontWeight: 'bold' }}
+                          />
+                          <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '12px' }} />
+                          <Area type="monotone" dataKey="fillers" name="Fillers" stackId="1" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.6} />
+                          <Area type="monotone" dataKey="stammers" name="Stammers" stackId="1" stroke="#ec4899" fill="#ec4899" fillOpacity={0.6} />
+                          <Area type="monotone" dataKey="pauses" name="Long Pauses" stackId="1" stroke="#8b5cf6" fill="#8b5cf6" fillOpacity={0.6} />
+                        </AreaChart>
+                      ) : (
+                        <LineChart data={effectiveAnalytics.timeline} margin={{ top: 15, right: 15, left: -20, bottom: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                          <XAxis dataKey="name" stroke="var(--text-muted)" fontSize={11} tickLine={false} />
+                          <YAxis domain={[60, 220]} stroke="var(--text-muted)" fontSize={11} tickLine={false} />
+                          <Tooltip
+                            contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)', borderRadius: 'var(--radius-sm)' }}
+                            labelStyle={{ color: 'var(--text-primary)', fontWeight: 'bold' }}
+                          />
+                          <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '12px' }} />
+                          <ReferenceArea y1={120} y2={150} fill="rgba(6, 182, 212, 0.12)" stroke="rgba(6, 182, 212, 0.3)" />
+                          <ReferenceLine y={135} stroke="#06b6d4" strokeDasharray="3 3" label={{ value: '135 WPM Target', fill: '#06b6d4', fontSize: 10, position: 'insideBottomRight' }} />
+                          <Line type="monotone" dataKey="wpm" name="Speaking Rate (WPM)" stroke="#06b6d4" strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 6 }} />
+                        </LineChart>
+                      )}
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </div>
+
+              {/* Right Column: 5-Axis Competency Radar & Streak */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                <div className="glass-card" style={{ padding: '20px', borderRadius: 'var(--radius-lg)' }}>
+                  <h3 style={{ fontSize: '16px', fontWeight: '700', color: 'var(--text-primary)', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Target size={18} style={{ color: 'var(--primary)' }} />
+                    5-Axis Competency Radar (0-10)
+                  </h3>
+                  <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '4px 0 10px 0' }}>
+                    Baseline vs. Current multi-axial performance comparison.
+                  </p>
+                  <div className="radar-wrapper" style={{ height: '220px' }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <RadarChart cx="50%" cy="50%" outerRadius="70%" data={effectiveAnalytics.radar_data}>
+                        <PolarGrid stroke="rgba(255,255,255,0.1)" />
+                        <PolarAngleAxis dataKey="dimension" stroke="var(--text-secondary)" fontSize={10} />
+                        <PolarRadiusAxis angle={30} domain={[0, 10]} stroke="rgba(255,255,255,0.2)" fontSize={9} />
+                        <Radar name="Baseline" dataKey="baseline" stroke="#94a3b8" fill="#94a3b8" fillOpacity={0.25} />
+                        <Radar name="Current" dataKey="current" stroke="var(--primary)" fill="var(--primary)" fillOpacity={0.5} />
+                        <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '6px' }} />
+                      </RadarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                <div className="glass-card stat-card-highlight" style={{ padding: '18px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <Flame size={30} style={{ color: 'var(--secondary)', fill: 'var(--secondary)' }} />
+                      <div>
+                        <h3 style={{ fontSize: '16px', fontWeight: '700', color: 'var(--text-primary)', margin: 0 }}>Daily Goal Streak</h3>
+                        <p style={{ fontSize: '11px', color: 'var(--text-secondary)', margin: '2px 0 0 0' }}>Consecutive UTC days</p>
+                      </div>
+                    </div>
+                    <div style={{ fontSize: '30px', fontWeight: '800', color: 'var(--text-primary)' }}>
+                      {streakCount} <span style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>Days</span>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '12px', paddingTop: '10px', borderTop: '1px solid var(--border-color)', fontSize: '12px' }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>Total Logged Sessions:</span>
+                    <strong style={{ color: 'var(--text-primary)' }}>{effectiveAnalytics.total_sessions}</strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Weak Words & Pronunciation Mastery Shelf */}
+            {effectiveAnalytics.weak_words && effectiveAnalytics.weak_words.length > 0 && (
+              <div className="weak-words-shelf">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                  <div>
+                    <h3 style={{ fontSize: '16px', fontWeight: '700', color: 'var(--text-primary)', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <BookOpen size={18} style={{ color: 'var(--primary)' }} />
+                      Vocabulary & Pronunciation Mastery Tracker
+                    </h3>
+                    <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
+                      Words flagged in previous speech sessions. Listen to proper enunciation or launch targeted practice.
+                    </p>
+                  </div>
+                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.04)', padding: '4px 10px', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
+                    {effectiveAnalytics.weak_words.filter(w => w.status === 'mastered').length} Mastered / {effectiveAnalytics.weak_words.length} Total Tracked
+                  </span>
+                </div>
+
+                <div className="weak-words-grid">
+                  {effectiveAnalytics.weak_words.map((item, idx) => (
+                    <div key={idx} className="weak-word-card">
+                      <div className="weak-word-header">
+                        <span className="weak-word-text">"{item.word}"</span>
+                        <span className={`status-chip ${item.status}`}>
+                          {item.status === 'mastered' ? 'Mastered' : 'Needs Drill'}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                        Flagged {item.count} {item.count === 1 ? 'time' : 'times'}
+                        {item.spoken_as.length > 0 && (
+                          <span style={{ display: 'block', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                            Spoken: "{item.spoken_as.join(', ')}"
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
+                        <button
+                          onClick={() => playEdgeLikeTTS(item.word, 0.85)}
+                          className="chart-switcher-btn"
+                          style={{ flex: 1, padding: '5px 8px', fontSize: '11px', justifyContent: 'center', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }}
+                          title="Listen to standard pronunciation"
+                        >
+                          <Volume2 size={12} /> Listen
+                        </button>
+                        <button
+                          onClick={() => {
+                            setFluencyTargetText(`Focus on enunciation: "${item.word.toUpperCase()}". Practice saying this word smoothly within a full sentence.`);
+                            handleTabChange('fluency');
+                          }}
+                          className="chart-switcher-btn"
+                          style={{ flex: 1, padding: '5px 8px', fontSize: '11px', justifyContent: 'center', background: 'var(--primary-light)', color: 'var(--primary)', border: '1px solid var(--primary)' }}
+                          title="Launch drill for this word"
+                        >
+                          <Target size={12} /> Drill
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Swappable History Timelines Logs Panel */}
-            <div className="glass-card" style={{ marginTop: '30px', textAlign: 'left', borderRadius: 'var(--radius-lg)' }}>
+            <div className="glass-card" style={{ marginTop: '24px', textAlign: 'left', borderRadius: 'var(--radius-lg)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '15px', marginBottom: '20px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   <History size={22} style={{ color: 'var(--primary)' }} />
-                  <h3 style={{ fontSize: '18px', fontWeight: '700', color: 'var(--text-primary)' }}>
-                    {historyTab === 'analysis' ? 'Fluency History (Module 1)' : 'Exercise History'}
+                  <h3 style={{ fontSize: '18px', fontWeight: '700', color: 'var(--text-primary)', margin: 0 }}>
+                    {historyTab === 'analysis' ? 'Fluency History (Module 1)' : historyTab === 'video' ? 'Video Practice History (Module 2)' : 'Exercise History'}
                   </h3>
                 </div>
 
-                {/* Sub-tab Swapper */}
+                {/* Sub-tab Swapper with 3 tabs */}
                 <div style={{ display: 'flex', gap: '6px', backgroundColor: 'rgba(255,255,255,0.02)', padding: '2px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
                   <button 
                     className={`nav-tab-btn ${historyTab === 'analysis' ? 'active' : ''}`}
@@ -1344,13 +1810,20 @@ function App() {
                     onClick={() => { setHistoryTab('exercise'); setExpandedSessionId(null); }}
                     style={{ fontSize: '12px', padding: '6px 12px' }}
                   >
-                    Exercise History
+                    Exercises
+                  </button>
+                  <button 
+                    className={`nav-tab-btn ${historyTab === 'video' ? 'active' : ''}`}
+                    onClick={() => { setHistoryTab('video'); setExpandedSessionId(null); }}
+                    style={{ fontSize: '12px', padding: '6px 12px' }}
+                  >
+                    Module 2: Video
                   </button>
                 </div>
               </div>
 
               {filteredHistory.length === 0 ? (
-                <p style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>No session logs found for this module. Record a session to populate this list!</p>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '14px', margin: 0 }}>No session logs found for this module. Record a session to populate this list!</p>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   {visibleHistory.map((session, idx) => {
@@ -1361,17 +1834,23 @@ function App() {
                     const isExerciseAnalysis = session.session_category === 'analysis' || (session.type === 'exercise' && session.final_score !== undefined);
                     const badgeColor = isExercisePractice || session.type === 'practice'
                       ? 'var(--primary-light)'
+                      : session.type === 'video' || session.session_category === 'video'
+                      ? 'rgba(6, 182, 212, 0.15)'
                       : 'var(--secondary-light)';
                     const badgeTextColor = isExercisePractice || session.type === 'practice'
                       ? 'var(--primary)'
+                      : session.type === 'video' || session.session_category === 'video'
+                      ? '#06b6d4'
                       : 'var(--secondary)';
                     const summaryScoreText = isExercisePractice
                       ? `Practice score: ${session.pronunciation_score ?? 0}/10`
                       : isExerciseAnalysis
                         ? `Fluency score: ${session.final_score ?? 0}/10`
-                        : session.type === 'analysis'
-                          ? `Fluency score: ${session.final_score ?? 0}/10`
-                          : `Exercise score: ${session.pronunciation_score ?? session.final_score ?? 0}/10`;
+                        : session.type === 'video' || session.session_category === 'video'
+                          ? `Overall score: ${session.final_score ?? session.pronunciation_score ?? 0}/10`
+                          : session.type === 'analysis'
+                            ? `Fluency score: ${session.final_score ?? 0}/10`
+                            : `Exercise score: ${session.pronunciation_score ?? session.final_score ?? 0}/10`;
 
                     return (
                       <div key={idx} style={{ display: 'flex', flexDirection: 'column', padding: '16px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
@@ -1381,13 +1860,13 @@ function App() {
                               <span style={{ 
                                 fontSize: '10px', 
                                 padding: '2px 8px', 
-                                borderRadius: '4px',
+                                borderRadius: '4px', 
                                 fontWeight: 'bold',
                                 textTransform: 'uppercase',
                                 backgroundColor: badgeColor,
                                 color: badgeTextColor
                               }}>
-                                {session.type}
+                                {session.type === 'video' ? 'Module 2: Video' : session.type}
                               </span>
                               <span style={{ fontSize: '14px', fontWeight: 'bold', color: 'var(--text-primary)' }}>
                                 {summaryScoreText}
@@ -1396,6 +1875,7 @@ function App() {
                             <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px' }}>
                               {session.type === 'practice' ? `Target: "${session.target_text}"`
                                 : session.type === 'analysis' ? `Spoken: "${session.transcript || 'Speech'}"`
+                                : session.type === 'video' ? `Video practice: "${session.spoken_text || session.transcript || 'Video analysis session'}"`
                                 : `Exercise: ${session.exercise_title || session.exercise_id || 'Practice Drill'}`}
                             </p>
                           </div>
