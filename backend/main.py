@@ -3,6 +3,7 @@ import shutil
 import uuid
 import logging
 import re
+import difflib
 import hashlib
 import hmac
 import secrets
@@ -1123,54 +1124,86 @@ def get_user_reports(user_id: str, authorization: Optional[str] = Header(None)):
 
 def align_words(target_words: List[str], spoken_words: List[str]) -> List[Dict[str, Any]]:
     """
-    Performs dynamic programming sequence alignment (Levenshtein Edit Distance) 
-    between target_words and spoken_words to map expected vs. actual spoken tokens.
+    Performs anchor-based sequence alignment between target_words and spoken_words.
+    Uses SequenceMatcher to lock down matching anchor words, and accurately pairs
+    substituted, mispronounced, or omitted tokens without cascading false mismatches.
     """
-    n, m = len(target_words), len(spoken_words)
-    dp = [[0] * (m + 1) for _ in range(n + 1)]
-    for i in range(n + 1):
-        dp[i][0] = i
-    for j in range(m + 1):
-        dp[0][j] = j
-        
-    for i in range(1, n + 1):
-        for j in range(1, m + 1):
-            if target_words[i-1] == spoken_words[j-1]:
-                dp[i][j] = dp[i-1][j-1]
-            else:
-                dp[i][j] = min(
-                    dp[i-1][j] + 1,    # Omission
-                    dp[i][j-1] + 1,    # Insertion
-                    dp[i-1][j-1] + 1   # Substitution
-                )
-                
-    i, j = n, m
-    alignment_map = {}
+    clean_t = [re.sub(r'[^a-z0-9]', '', w.lower()) for w in target_words]
+    clean_s = [re.sub(r'[^a-z0-9]', '', w.lower()) for w in spoken_words]
     
-    while i > 0 or j > 0:
-        if i > 0 and j > 0 and target_words[i-1] == spoken_words[j-1]:
-            alignment_map[i-1] = spoken_words[j-1]
-            i -= 1
-            j -= 1
-        elif i > 0 and j > 0 and dp[i][j] == dp[i-1][j-1] + 1:
-            alignment_map[i-1] = spoken_words[j-1]
-            i -= 1
-            j -= 1
-        elif i > 0 and (j == 0 or dp[i][j] == dp[i-1][j] + 1):
-            alignment_map[i-1] = ""
-            i -= 1
-        else:
-            j -= 1
-
+    matcher = difflib.SequenceMatcher(None, clean_t, clean_s)
     mismatched = []
-    for idx, expected in enumerate(target_words):
-        spoken_val = alignment_map.get(idx, "")
-        if expected != spoken_val:
-            mismatched.append({
-                "expected": expected,
-                "spoken": spoken_val,
-                "index": idx
-            })
+    
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == 'equal':
+            continue
+        elif tag == 'delete':
+            # Target words omitted by speaker
+            for idx in range(i1, i2):
+                mismatched.append({
+                    "expected": target_words[idx],
+                    "spoken": "",
+                    "index": idx
+                })
+        elif tag == 'insert':
+            # Extra words inserted by speaker (fillers, hesitations, repetitions) - do not flag target words
+            continue
+        elif tag == 'replace':
+            t_slice = target_words[i1:i2]
+            t_clean_slice = clean_t[i1:i2]
+            s_slice = spoken_words[j1:j2]
+            s_clean_slice = clean_s[j1:j2]
+            
+            t_to_s = {}
+            used_s = set()
+            
+            # 1. High similarity match (morphological/phonetic mispronunciation)
+            for t_idx, (t_orig, t_c) in enumerate(zip(t_slice, t_clean_slice)):
+                best_s_idx = -1
+                best_score = 0.0
+                for s_idx, (s_orig, s_c) in enumerate(zip(s_slice, s_clean_slice)):
+                    if s_idx in used_s:
+                        continue
+                    sim = difflib.SequenceMatcher(None, t_c, s_c).ratio()
+                    if t_c and s_c and t_c[0] == s_c[0]:
+                        sim += 0.12
+                    if sim > best_score:
+                        best_score = sim
+                        best_s_idx = s_idx
+                
+                if best_s_idx != -1 and best_score >= 0.40:
+                    t_to_s[t_idx] = s_slice[best_s_idx]
+                    used_s.add(best_s_idx)
+            
+            # 2. Equal length blocks: 1-to-1 sequential mapping for remaining
+            if len(t_slice) == len(s_slice):
+                for t_idx in range(len(t_slice)):
+                    if t_idx not in t_to_s:
+                        for s_idx in range(len(s_slice)):
+                            if s_idx not in used_s:
+                                t_to_s[t_idx] = s_slice[s_idx]
+                                used_s.add(s_idx)
+                                break
+            
+            # 3. If there are single target words or unused spoken words, assign appropriately
+            for t_idx in range(len(t_slice)):
+                if t_idx not in t_to_s:
+                    for s_idx in range(len(s_slice)):
+                        if s_idx not in used_s:
+                            t_to_s[t_idx] = s_slice[s_idx]
+                            used_s.add(s_idx)
+                            break
+                    if t_idx not in t_to_s:
+                        t_to_s[t_idx] = ""
+            
+            for t_local_idx, t_orig in enumerate(t_slice):
+                abs_idx = i1 + t_local_idx
+                mismatched.append({
+                    "expected": t_orig,
+                    "spoken": t_to_s.get(t_local_idx, ""),
+                    "index": abs_idx
+                })
+
     return mismatched
 
 @app.post("/analyze/speech")

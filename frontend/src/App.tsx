@@ -831,41 +831,53 @@ function App() {
     }
 
     const currentTarget = activeTab === 'exercises' ? exerciseTargetText : fluencyTargetText;
-    const targetWords = currentTarget.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "").toLowerCase().split(/\s+/).filter(Boolean);
-    const liveWords = liveTranscript.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "").toLowerCase().split(/\s+/).filter(Boolean);
+    const targetWords = currentTarget
+      .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "")
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
+    const liveWords = liveTranscript
+      .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "")
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
 
     if (liveWords.length === 0) {
       return index === 0 ? 'practice-word current' : 'practice-word default';
     }
 
+    let matchedTargetIdx = -1;
     let liveIdx = 0;
-    let wordStatus: 'correct' | 'incorrect' | 'default' | 'current' = 'default';
 
-    for (let tIdx = 0; tIdx <= index; tIdx++) {
-      if (tIdx >= targetWords.length) break;
-      if (liveIdx >= liveWords.length) {
-        if (tIdx === index) wordStatus = 'current';
-        break;
-      }
-
+    for (let tIdx = 0; tIdx < targetWords.length; tIdx++) {
+      if (liveIdx >= liveWords.length) break;
       const tWord = targetWords[tIdx];
       const lWord = liveWords[liveIdx];
 
-      if (tWord === lWord) {
-        if (tIdx === index) wordStatus = 'correct';
+      if (tWord === lWord || tWord.includes(lWord) || lWord.includes(tWord)) {
+        matchedTargetIdx = tIdx;
         liveIdx++;
       } else {
         const nextTWord = tIdx + 1 < targetWords.length ? targetWords[tIdx + 1] : '';
-        if (nextTWord === lWord) {
-          if (tIdx === index) wordStatus = 'incorrect';
+        if (nextTWord && (nextTWord === lWord || nextTWord.includes(lWord) || lWord.includes(nextTWord))) {
+          matchedTargetIdx = tIdx;
         } else {
-          if (tIdx === index) wordStatus = 'incorrect';
+          matchedTargetIdx = tIdx;
           liveIdx++;
         }
       }
     }
 
-    return `practice-word ${wordStatus}`;
+    if (index < matchedTargetIdx) {
+      // Word has already been spoken by the user -> Blue
+      return 'practice-word spoken';
+    } else if (index === matchedTargetIdx) {
+      // Current active word the user said / is saying -> Blue (current)
+      return 'practice-word current';
+    } else {
+      // Not yet spoken -> Default neutral color
+      return 'practice-word default';
+    }
   };
 
   // ---------- Edge-like TTS helpers (browser SpeechSynthesis, prefers Microsoft/Edge voices when available) ----------
@@ -1430,7 +1442,7 @@ function App() {
                                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                                       {session.mismatched_words.map((w, idx) => (
                                         <span key={idx} style={{ backgroundColor: 'var(--error-light)', color: 'var(--error)', padding: '2px 8px', borderRadius: '4px', fontSize: '12px' }}>
-                                          Expected: "{w.expected}" → Said: "{w.spoken || '[omitted]'}"
+                                          Expected: "{w.expected}" → Said: "{w.spoken || '[not detected / skipped]'}"
                                         </span>
                                       ))}
                                     </div>
@@ -1748,30 +1760,11 @@ function App() {
                     </button>
                   </div>
                 </div>
-                {!analysisResult ? (
-                  <div className="practice-sentence-box" style={{ fontSize: '18px', lineHeight: '1.6', backgroundColor: 'var(--bg-primary)', border: 'none' }}>
-                    {fluencyTargetText.split(' ').map((word, idx) => (
-                      <span key={idx} className={getLiveWordColorClass(word, idx)}>{word} </span>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="practice-sentence-box" style={{ fontSize: '18px', lineHeight: '1.6', backgroundColor: 'var(--bg-primary)', border: 'none' }}>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
-                      {fluencyTargetText.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "").split(/\s+/).map((word, index) => {
-                        const mismatchedIndices = new Set((analysisResult.mismatched_words || []).map((w: any) => w.index));
-                        const isMismatched = mismatchedIndices.has(index);
-                        return (
-                          <span 
-                            key={index} 
-                            className={`practice-word ${isMismatched ? 'incorrect' : 'correct'}`}
-                          >
-                            {word}{' '}
-                          </span>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
+                <div className="practice-sentence-box" style={{ fontSize: '18px', lineHeight: '1.6', backgroundColor: 'var(--bg-primary)', border: 'none' }}>
+                  {fluencyTargetText.trim().split(/\s+/).map((word, idx) => (
+                    <span key={idx} className={getLiveWordColorClass(word, idx)}>{word} </span>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -2006,9 +1999,147 @@ function App() {
               </div>
             </div>
 
+            {/* Pronunciation Accuracy Analysis card (renders if target passage was practiced) */}
+            {analysisResult && (fluencyTargetText || analysisResult.target_text || analysisResult.word_error_rate !== undefined || (analysisResult.mismatched_words && analysisResult.mismatched_words.length > 0)) && (
+              <div className="glass-card result-section" style={{ marginTop: '30px', textAlign: 'left' }}>
+                <h3 className="feedback-title" style={{ textAlign: 'center', marginBottom: '20px' }}>Pronunciation Accuracy Analysis</h3>
+                
+                {/* Passage with words highlighted in Green (correct) and Red (wrong pronunciation) */}
+                <div style={{ marginBottom: '24px', padding: '18px', backgroundColor: 'var(--bg-primary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>
+                    📖 Pronunciation Passage Evaluation
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', fontSize: '18px', lineHeight: '1.8' }}>
+                    {(fluencyTargetText || analysisResult.target_text || '').trim().split(/\s+/).map((word: string, index: number) => {
+                      const cleanWord = word.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "");
+                      const mismatchedIndices = new Set((analysisResult.mismatched_words || []).map((w: any) => w.index));
+                      const isMismatched = mismatchedIndices.has(index);
+                      return (
+                        <span key={index} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                          {isMismatched && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                speakText(cleanWord);
+                              }}
+                              title={`Listen to correct pronunciation of "${cleanWord}"`}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '3px',
+                                padding: '2px 6px',
+                                backgroundColor: 'rgba(99, 102, 241, 0.15)',
+                                border: '1px solid var(--primary)',
+                                borderRadius: '4px',
+                                color: 'var(--primary)',
+                                fontSize: '11px',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                transition: 'all 0.15s ease',
+                                verticalAlign: 'middle',
+                              }}
+                            >
+                              <Volume2 size={11} />
+                              <span>Listen</span>
+                            </button>
+                          )}
+                          <span 
+                            className={`practice-word ${isMismatched ? 'incorrect' : 'correct'}`}
+                          >
+                            {word}{' '}
+                          </span>
+                        </span>
+                      );
+                    })}
+                  </div>
+                  {/* Pronunciation Legend */}
+                  <div style={{ display: 'flex', gap: '20px', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--border-color)', fontSize: '13px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ display: 'inline-block', width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#22c55e' }}></span>
+                      <span style={{ color: '#22c55e', fontWeight: 600 }}>Green: Correct Pronunciation</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ display: 'inline-block', width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#ef4444' }}></span>
+                      <span style={{ color: '#ef4444', fontWeight: 600 }}>Red: Wrong Pronunciation / Missed</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="result-grid">
+                  <div className="score-panel">
+                    <div className="score-circle">
+                      <span className="score-val">
+                        {analysisResult.word_error_rate !== undefined 
+                          ? Math.max(0, Math.round((1 - analysisResult.word_error_rate) * 10 * 10) / 10) 
+                          : analysisResult.final_score}
+                      </span>
+                      <span className="score-label">/ 10</span>
+                    </div>
+                    <h4 className="score-heading">Accuracy Score</h4>
+                    <p className="score-desc">
+                      Accuracy: {(((1 - (analysisResult.word_error_rate ?? 0))) * 100).toFixed(0)}% matching
+                    </p>
+                  </div>
+
+                  <div className="feedback-panel">
+                    <h4 className="feedback-title">Articulation & Word Alignment</h4>
+                    <p style={{ fontSize: '14px', color: 'var(--text-secondary)', lineHeight: '1.6', marginBottom: '16px' }}>
+                      Target words matched against your recorded audio. Words pronounced correctly are highlighted in green, and wrong/mispronounced words are highlighted in red.
+                    </p>
+                    {analysisResult.mismatched_words && analysisResult.mismatched_words.length > 0 ? (
+                      <ul className="feedback-list">
+                        {analysisResult.mismatched_words.map((w: any, idx: number) => (
+                          <li className="feedback-item" key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                              <span className="feedback-bullet" style={{ color: '#ef4444' }}>▸</span>
+                              <span>
+                                At index {w.index + 1}: {w.spoken ? (
+                                  <>Expected <strong style={{ color: '#22c55e' }}>"{w.expected}"</strong> but recorded <strong style={{ color: '#ef4444' }}>"{w.spoken}"</strong></>
+                                ) : (
+                                  <>Expected <strong style={{ color: '#22c55e' }}>"{w.expected}"</strong> <span style={{ color: '#ef4444', fontStyle: 'italic' }}>(not detected / skipped)</span></>
+                                )}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => speakText(w.expected)}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '5px',
+                                fontSize: '11px',
+                                fontWeight: 600,
+                                padding: '4px 10px',
+                                backgroundColor: 'rgba(99, 102, 241, 0.12)',
+                                border: '1px solid var(--primary)',
+                                borderRadius: 'var(--radius-sm)',
+                                color: 'var(--text-primary)',
+                                cursor: 'pointer',
+                                transition: 'var(--transition-fast)',
+                                whiteSpace: 'nowrap'
+                              }}
+                              title={`Listen to correct pronunciation of "${w.expected}"`}
+                            >
+                              <Volume2 size={12} style={{ color: 'var(--primary)' }} />
+                              Listen
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <div style={{ color: 'var(--success)', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', fontWeight: 'bold' }}>
+                        <CheckCircle size={18} /> Excellent clarity! You didn't make any phonetic mistakes.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Fluency Score Report */}
             {analysisResult && (
-              <div className="glass-card result-section" style={{ marginTop: '30px' }}>
+              <div className="glass-card result-section" style={{ marginTop: '24px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                   <h3 className="feedback-title" style={{ margin: 0 }}>Fluency & Clarity Analysis</h3>
                   <button
@@ -2543,30 +2674,11 @@ function App() {
                         {(isAudioPlaying || isAudioLoading) && currentAudioType === 'reference' ? 'Stop' : 'Listen Reference'}
                       </button>
                     </div>
-                    {!analysisResult ? (
-                      <div className="practice-sentence-box" style={{ fontSize: '18px', lineHeight: '1.6', backgroundColor: 'var(--bg-primary)', border: 'none' }}>
-                        {exerciseTargetText.split(' ').map((word, idx) => (
-                          <span key={idx} className={getLiveWordColorClass(word, idx)}>{word} </span>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="practice-sentence-box" style={{ fontSize: '18px', lineHeight: '1.6', backgroundColor: 'var(--bg-primary)', border: 'none' }}>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                          {exerciseTargetText.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "").split(/\s+/).map((word, index) => {
-                            const mismatchedIndices = new Set((analysisResult.mismatched_words || []).map((w: any) => w.index));
-                            const isMismatched = mismatchedIndices.has(index);
-                            return (
-                              <span 
-                                key={index} 
-                                className={`practice-word ${isMismatched ? 'incorrect' : 'correct'}`}
-                              >
-                                {word}{' '}
-                              </span>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
+                    <div className="practice-sentence-box" style={{ fontSize: '18px', lineHeight: '1.6', backgroundColor: 'var(--bg-primary)', border: 'none' }}>
+                      {exerciseTargetText.trim().split(/\s+/).map((word, idx) => (
+                        <span key={idx} className={getLiveWordColorClass(word, idx)}>{word} </span>
+                      ))}
+                    </div>
                   </div>
                 )}
 
@@ -2866,8 +2978,70 @@ function App() {
                 {/* Pronunciation scoring card (renders if target passage accuracy was evaluated) */}
                 {analysisResult && (analysisResult.word_error_rate !== undefined || (analysisResult.mismatched_words && analysisResult.mismatched_words.length > 0)) && (
                   <div className="glass-card result-section" style={{ marginTop: '30px', textAlign: 'left' }}>
-                    <h3 className="feedback-title" style={{ textAlign: 'center' }}>Pronunciation Accuracy Analysis</h3>
+                    <h3 className="feedback-title" style={{ textAlign: 'center', marginBottom: '20px' }}>Pronunciation Accuracy Analysis</h3>
                     
+                    {/* Passage with words highlighted in Green (correct) and Red (wrong pronunciation) */}
+                    <div style={{ marginBottom: '24px', padding: '18px', backgroundColor: 'var(--bg-primary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+                      <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>
+                        📖 Pronunciation Passage Evaluation
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', fontSize: '18px', lineHeight: '1.8' }}>
+                        {(exerciseTargetText || analysisResult.target_text || '').trim().split(/\s+/).map((word: string, index: number) => {
+                          const cleanWord = word.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "");
+                          const mismatchedIndices = new Set((analysisResult.mismatched_words || []).map((w: any) => w.index));
+                          const isMismatched = mismatchedIndices.has(index);
+                          return (
+                            <span key={index} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                              {isMismatched && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    speakText(cleanWord);
+                                  }}
+                                  title={`Listen to correct pronunciation of "${cleanWord}"`}
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '3px',
+                                    padding: '2px 6px',
+                                    backgroundColor: 'rgba(99, 102, 241, 0.15)',
+                                    border: '1px solid var(--primary)',
+                                    borderRadius: '4px',
+                                    color: 'var(--primary)',
+                                    fontSize: '11px',
+                                    fontWeight: 700,
+                                    cursor: 'pointer',
+                                    transition: 'all 0.15s ease',
+                                    verticalAlign: 'middle',
+                                  }}
+                                >
+                                  <Volume2 size={11} />
+                                  <span>Listen</span>
+                                </button>
+                              )}
+                              <span 
+                                className={`practice-word ${isMismatched ? 'incorrect' : 'correct'}`}
+                              >
+                                {word}{' '}
+                              </span>
+                            </span>
+                          );
+                        })}
+                      </div>
+                      {/* Pronunciation Legend */}
+                      <div style={{ display: 'flex', gap: '20px', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--border-color)', fontSize: '13px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span style={{ display: 'inline-block', width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#22c55e' }}></span>
+                          <span style={{ color: '#22c55e', fontWeight: 600 }}>Green: Correct Pronunciation</span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span style={{ display: 'inline-block', width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#ef4444' }}></span>
+                          <span style={{ color: '#ef4444', fontWeight: 600 }}>Red: Wrong Pronunciation / Missed</span>
+                        </div>
+                      </div>
+                    </div>
+
                     <div className="result-grid">
                       <div className="score-panel">
                         <div className="score-circle">
@@ -2887,16 +3061,45 @@ function App() {
                       <div className="feedback-panel">
                         <h4 className="feedback-title">Articulation & Word Alignment</h4>
                         <p style={{ fontSize: '14px', color: 'var(--text-secondary)', lineHeight: '1.6', marginBottom: '16px' }}>
-                          Your spoken text was matched with the target words. Correct words are colored green, while mismatched/mispronounced words are colored red in the card above.
+                          Target words matched against your spoken audio. Words pronounced correctly are highlighted in green, and wrong/mispronounced words are highlighted in red.
                         </p>
                         {analysisResult.mismatched_words && analysisResult.mismatched_words.length > 0 ? (
                           <ul className="feedback-list">
-                            {analysisResult.mismatched_words.map((w, idx) => (
-                              <li className="feedback-item" key={idx}>
-                                <span className="feedback-bullet">▸</span>
-                                <span>
-                                  At index {w.index + 1}: Expected <strong>"{w.expected}"</strong> but recorded <strong>"{w.spoken || '[omitted]'}"</strong>
-                                </span>
+                            {analysisResult.mismatched_words.map((w: any, idx: number) => (
+                              <li className="feedback-item" key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                  <span className="feedback-bullet" style={{ color: '#ef4444' }}>▸</span>
+                                  <span>
+                                    At index {w.index + 1}: {w.spoken ? (
+                                      <>Expected <strong style={{ color: '#22c55e' }}>"{w.expected}"</strong> but recorded <strong style={{ color: '#ef4444' }}>"{w.spoken}"</strong></>
+                                    ) : (
+                                      <>Expected <strong style={{ color: '#22c55e' }}>"{w.expected}"</strong> <span style={{ color: '#ef4444', fontStyle: 'italic' }}>(not detected / skipped)</span></>
+                                    )}
+                                  </span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => speakText(w.expected)}
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '5px',
+                                    fontSize: '11px',
+                                    fontWeight: 600,
+                                    padding: '4px 10px',
+                                    backgroundColor: 'rgba(99, 102, 241, 0.12)',
+                                    border: '1px solid var(--primary)',
+                                    borderRadius: 'var(--radius-sm)',
+                                    color: 'var(--text-primary)',
+                                    cursor: 'pointer',
+                                    transition: 'var(--transition-fast)',
+                                    whiteSpace: 'nowrap'
+                                  }}
+                                  title={`Listen to correct pronunciation of "${w.expected}"`}
+                                >
+                                  <Volume2 size={12} style={{ color: 'var(--primary)' }} />
+                                  Listen
+                                </button>
                               </li>
                             ))}
                           </ul>

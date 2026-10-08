@@ -441,18 +441,31 @@
   border-bottom: 2px solid transparent;
 }
 
-.practice-word.correct {
-  color: var(--success);
-}
-
-.practice-word.incorrect {
-  color: var(--error);
-  border-bottom-color: var(--error);
+/* Live Reading: Spoken words turn blue as the user speaks */
+.practice-word.spoken {
+  color: #3b82f6;
+  font-weight: 500;
 }
 
 .practice-word.current {
-  color: var(--primary);
-  border-bottom-color: var(--primary);
+  color: #3b82f6;
+  font-weight: 700;
+  border-bottom-color: #3b82f6;
+}
+
+/* Post-Analysis Report: Words turn green for correct and red for wrong pronunciation */
+.practice-word.correct {
+  color: #22c55e !important;
+  font-weight: 600;
+}
+
+.practice-word.incorrect {
+  color: #ef4444 !important;
+  font-weight: 600;
+  border-bottom: 2px solid #ef4444;
+  background-color: rgba(239, 68, 68, 0.08);
+  border-radius: 3px;
+  padding: 0 2px;
 }
 
 /* TTS Controls */

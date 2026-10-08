@@ -420,55 +420,72 @@ export const RecorderPanel: React.FC<RecorderPanelProps> = ({
           <div style={{ padding: '24px', flex: 1, overflowY: 'auto', fontSize: '16px', lineHeight: 1.6, color: 'var(--text-primary)', fontStyle: (taskConfig.taskType === 'custom_topic' || liveTranscript) ? 'normal' : 'italic' }}>
             {taskConfig.taskType === 'custom_topic' ? (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
-                {activePrompt.split(/\s+/).map((word, index) => {
-                  const getLiveWordColor = (idx: number) => {
-                    if (!liveTranscript) return idx === 0 ? { color: '#3b82f6', fontWeight: 'bold' } : { color: 'var(--text-primary)', fontWeight: 'normal' };
-                    
-                    const targetWords = activePrompt.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "").toLowerCase().split(/\s+/).filter(Boolean);
-                    const liveWords = liveTranscript.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "").toLowerCase().split(/\s+/).filter(Boolean);
-                    
-                    if (liveWords.length === 0) return idx === 0 ? { color: '#3b82f6', fontWeight: 'bold' } : { color: 'var(--text-primary)', fontWeight: 'normal' };
-                    
+                {(() => {
+                  const targetWords = activePrompt.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "").toLowerCase().split(/\s+/).filter(Boolean);
+                  const liveWords = liveTranscript.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "").toLowerCase().split(/\s+/).filter(Boolean);
+                  
+                  let matchedTargetIdx = -1;
+                  if (liveWords.length > 0) {
                     let liveIdx = 0;
-                    let wordStatus: 'correct' | 'incorrect' | 'default' | 'current' = 'default';
-                    
-                    for (let tIdx = 0; tIdx <= idx; tIdx++) {
-                      if (tIdx >= targetWords.length) break;
-                      if (liveIdx >= liveWords.length) {
-                        if (tIdx === idx) wordStatus = 'current';
-                        break;
-                      }
-                      
+                    for (let tIdx = 0; tIdx < targetWords.length; tIdx++) {
+                      if (liveIdx >= liveWords.length) break;
                       const tWord = targetWords[tIdx];
                       const lWord = liveWords[liveIdx];
                       
-                      if (tWord === lWord || tWord.includes(lWord)) {
-                        if (tIdx === idx) wordStatus = 'correct';
+                      if (tWord === lWord || tWord.includes(lWord) || lWord.includes(tWord)) {
+                        matchedTargetIdx = tIdx;
                         liveIdx++;
                       } else {
                         const nextTWord = tIdx + 1 < targetWords.length ? targetWords[tIdx + 1] : '';
-                        if (nextTWord === lWord || nextTWord.includes(lWord)) {
-                          if (tIdx === idx) wordStatus = 'incorrect';
+                        if (nextTWord && (nextTWord === lWord || nextTWord.includes(lWord) || lWord.includes(nextTWord))) {
+                          matchedTargetIdx = tIdx;
                         } else {
-                          if (tIdx === idx) wordStatus = 'incorrect';
+                          matchedTargetIdx = tIdx;
                           liveIdx++;
                         }
                       }
                     }
-                    
-                    if (wordStatus === 'correct') return { color: '#22c55e', fontWeight: 'normal' };
-                    if (wordStatus === 'incorrect') return { color: '#ef4444', fontWeight: 'normal' };
-                    if (wordStatus === 'current') return { color: '#3b82f6', fontWeight: 'bold' };
-                    return { color: 'var(--text-primary)', fontWeight: 'normal' };
-                  };
-                  
-                  const style = getLiveWordColor(index);
-                  return (
-                    <span key={index} style={{ color: style.color, fontWeight: style.fontWeight, transition: 'color 0.2s' }}>
-                      {word}{' '}
-                    </span>
-                  );
-                })}
+                  }
+
+                  return activePrompt.trim().split(/\s+/).map((word, index) => {
+                    let color = 'var(--text-secondary)';
+                    let fontWeight = 'normal';
+                    let borderBottom = '2px solid transparent';
+
+                    if (liveWords.length === 0) {
+                      if (index === 0) {
+                        color = '#3b82f6';
+                        fontWeight = 'bold';
+                        borderBottom = '2px solid #3b82f6';
+                      }
+                    } else if (index < matchedTargetIdx) {
+                      // Word has already been spoken by the user -> Blue
+                      color = '#3b82f6';
+                      fontWeight = '500';
+                    } else if (index === matchedTargetIdx) {
+                      // Current active word the user said / is saying -> Blue (bold with underline)
+                      color = '#3b82f6';
+                      fontWeight = 'bold';
+                      borderBottom = '2px solid #3b82f6';
+                    }
+
+                    return (
+                      <span 
+                        key={index} 
+                        style={{ 
+                          color, 
+                          fontWeight, 
+                          borderBottom,
+                          transition: 'all 0.15s ease',
+                          marginRight: '4px',
+                          display: 'inline-block'
+                        }}
+                      >
+                        {word}{' '}
+                      </span>
+                    );
+                  });
+                })()}
               </div>
             ) : (
               liveTranscript ? renderLiveTranscriptWithFillers(liveTranscript) : (isRecording ? "Listening..." : "Your speech will appear here while recording.")

@@ -2,7 +2,7 @@ import os
 import sys
 
 # Add backend dir to path for imports
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from main import align_words
 
 def test_pronunciation_alignment():
