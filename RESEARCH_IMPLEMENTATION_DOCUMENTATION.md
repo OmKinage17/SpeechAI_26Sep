@@ -309,7 +309,7 @@ Important files:
 
 | File | Type | Module | Purpose | Important Functions/Classes | Status |
 | --- | --- | --- | --- | --- | --- |
-| backend/main.py | Backend | Core API | Primary FastAPI application and scoring logic | `clean_text`, `detect_fillers`, `generate_token`, `/practice/submit`, `/analyze/speech` | IMPLEMENTED |
+| backend/main.py | Backend | Core API | Primary FastAPI application and scoring logic | `clean_text`, `detect_fillers`, `generate_token`, `/analyze/speech` | IMPLEMENTED |
 | backend/audio_utils.py | Utility | Audio processing | Convert uploaded audio to 16 kHz mono WAV via FFmpeg | `convert_to_wav` | IMPLEMENTED |
 | backend/run_all_tests.py | Script | Testing | Runs various backend test files | `run_script`, `main` | IMPLEMENTED |
 | backend/video_module/config.py | Config | Video analysis | Constants and thresholds for video/audio assessment | `IDEAL_WPM_BANDS`, `LONG_PAUSE_SEC`, `DEFAULT_WEIGHTS` | IMPLEMENTED |
@@ -378,129 +378,74 @@ flowchart TD
 
 ## 10. Module-Wise Implementation
 
-## Module 1 — Practice Module
+## Module 1 — Speech Fluency Analysis & Pronunciation Tracking
 
 ### Objective
-Evaluate pronunciation quality by comparing spoken audio against a target sentence.
-
-### Status
-IMPLEMENTED
-
-### Input
-- user audio recording,
-- target text,
-- optional exercise metadata.
-
-### Processing Pipeline
-- capture recording,
-- convert to WAV,
-- transcribe using Whisper,
-- normalize target and transcript,
-- calculate WER,
-- compare mismatched words,
-- compute pronunciation score,
-- store session and return feedback.
-
-### Algorithms
-- Word Error Rate via `jiwer`
-- Text normalization and alignment
-
-### Models
-- Whisper base model
-- Type: ASR model
-- Pretrained: Yes
-
-### Feature Extraction
-- spoken text,
-- target text,
-- mismatched words,
-- alignment output,
-- WER.
-
-### Calculations
-Pronunciation score is computed as:
-
-```text
-pronunciation_score = max(0, min(10, round((1 - WER) * 10, 1)))
-```
-
-### Output
-- transcript,
-- WER,
-- pronunciation score,
-- mismatched words,
-- streak count.
-
-### Files Responsible
-- backend/main.py
-- frontend/src/App.tsx
-
-### API Endpoints
-- `POST /practice/submit`
-
-### Database Interaction
-Stores practice sessions and user-specific history in MongoDB.
-
----
-
-## Module 2 — Fluency Analysis Module
-
-### Objective
-Assess speaking fluency using timing, pause, filler, and clarity metrics.
+Assess holistic speaking fluency and therapeutic speech patterns (timing, pauses, filler words, stammers, and acoustic clarity), while also supporting target-passage pronunciation alignment and Word Error Rate (WER) scoring.
 
 ### Status
 IMPLEMENTED
 
 ### Input
 - recorded speech audio,
-- optional target text,
+- optional target text (for guided pronunciation & reading drills),
 - optional exercise metadata.
 
 ### Processing Pipeline
-- audio upload,
-- WAV conversion,
-- Whisper transcription,
-- word timestamp extraction,
-- filler detection,
-- pause and stammer detection,
-- score aggregation,
-- feedback generation.
+- capture audio recording and convert to 16 kHz mono WAV,
+- transcribe speech using Whisper ASR,
+- word timestamp and confidence extraction,
+- pronunciation alignment against optional target text (WER via `jiwer` + mismatched word locator),
+- filler detection via regex and lexical heuristics,
+- stammer / repetition detection and acoustic pause analysis,
+- composite fluency scoring across 5 weighted sub-scores,
+- rule-based therapy recommendations and optional Groq AI pathologist feedback,
+- persist session to MongoDB under `analysis_sessions`.
 
 ### Algorithms
+- Word Error Rate via `jiwer` and phonetic alignment,
 - filler detection via regex and phrase matching,
 - acoustic pause detection via RMS and silence thresholds,
-- rate and clarity normalization,
-- score aggregation logic.
+- speech rate and clarity normalization,
+- composite weighted scoring engine.
 
 ### Models
-- Whisper ASR model
+- Whisper ASR model (`base` / `small`)
+- Pretrained: Yes
 
 ### Feature Extraction
-- word count,
-- WPM,
-- filler words,
-- long pauses,
-- pause ratio,
-- repetition count,
-- clarity_raw,
-- transcript quality.
+- transcript & spoken word count,
+- speech rate (`wpm`),
+- filler count & identified filler words,
+- stammer / repetition events & details,
+- long pauses (>1.5s) & pause timeline,
+- pronunciation accuracy & mismatched words (when target text is supplied),
+- clarity score derived from average log probabilities.
 
 ### Calculations
-The backend uses configured thresholds such as:
-- `PAUSE_THRESHOLD_SEC = 1.5`
-- `IDEAL_WPM_MIN = 120.0`
-- `IDEAL_WPM_MAX = 150.0`
+Fluency scoring weights:
+- Filler score: 20%
+- Stammer score: 25%
+- Pause score: 20%
+- Speech rate score: 20%
+- Acoustic clarity score: 15%
 
-### Thresholds
-- long pause threshold: > 1.5 seconds
-- filler heuristic: observed as phrase and lexical detection
-- speech rate ideal range: 120–150 WPM
+Pronunciation alignment:
+```text
+word_error_rate = jiwer.wer(cleaned_target, cleaned_transcript)
+pronunciation_score = max(0, min(10, round((1 - WER) * 10, 1)))
+```
 
 ### Output
-- fluency score,
-- sub-scores,
-- feedback recommendations,
-- recommended exercises.
+- transcript,
+- duration & word count,
+- WPM,
+- filler count and specific filler words,
+- stammer events and locations,
+- pause timeline,
+- sub-scores breakdown & final score (0–10),
+- WER and mismatched words (when practicing with target passage),
+- clinical recommendations and therapy advice.
 
 ### Files Responsible
 - backend/main.py
@@ -510,11 +455,11 @@ The backend uses configured thresholds such as:
 - `POST /analyze/speech`
 
 ### Database Interaction
-Persists to analysis sessions collections.
+Persists sessions in MongoDB under `analysis_sessions`.
 
 ---
 
-## Module 3 — Video Analysis / Multimodal Communication Module
+## Module 2 — Video Analysis / Multimodal Communication Module
 
 ### Objective
 Analyze communication quality using both audio and visual signals from recorded video.
@@ -949,8 +894,7 @@ erDiagram
 | POST | `/auth/register` | User registration | name/email/password | status and payload | No | backend/main.py |
 | POST | `/auth/login` | User login | email/password | auth token | No | backend/main.py |
 | GET | `/practice/generate` | Generate practice text | topic and options | prompt text | Optional | backend/main.py |
-| POST | `/practice/submit` | Practice session analysis | audio + target text | score and feedback | Optional | backend/main.py |
-| POST | `/analyze/speech` | Fluency analysis | audio + optional target | speech score and feedback | Optional | backend/main.py |
+| POST | `/analyze/speech` | Module 1: Speech fluency & pronunciation analysis | audio + optional target | speech scores, alignment, & feedback | Optional | backend/main.py |
 | GET | `/exercises` | Retrieve exercises | query params | exercise metadata | Optional | backend/main.py |
 | GET | `/reports/{user_id}` | Fetch reports | user id | session history | Optional | backend/main.py |
 | GET | `/tts/generate` | Text-to-speech audio generation | text | audio stream | Optional | backend/main.py |

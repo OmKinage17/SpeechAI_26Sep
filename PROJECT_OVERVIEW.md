@@ -25,14 +25,14 @@ SpeechAI is an AI-driven speech therapy and fluency training system. It provides
 
 ### 2.2 System Architecture
 - Frontend calls backend APIs over HTTP
-- Backend stores users, sessions, and exercises in MongoDB
+- Backend stores users, sessions, exercises, and video analysis jobs in MongoDB
 - Whisper model is loaded lazily on the backend and reused across requests
 - Backend analytics use both exact metrics (WER, pauses, speed) and derived scores
 - UI presents:
   - Dashboard metrics and history
-  - Module 1 Practice session flow
-  - Module 2 Fluency analysis flow
-  - Exercise drill library and guided practice
+  - Module 1: Fluency Tracker (impromptu speaking, custom passages, pronunciation alignment, disfluency tracking)
+  - Module 2: Video Analysis (multimodal facial expressions, eye contact, head pose, posture, and speech)
+  - Exercise drill library and guided clinical practice
 
 ## 3. Data Flow & Working Flow
 ### 3.1 User Authentication
@@ -48,58 +48,64 @@ SpeechAI is an AI-driven speech therapy and fluency training system. It provides
 - Inputs:
   - `topic`
   - `length` (`sentence`, `paragraph`, `long_paragraph`)
+  - `level` (`easy`, `medium`, `difficult`)
   - `exercise_id` (optional)
 - Behavior:
   - If API key present, calls Groq AI via OpenAI-like chat completions
   - Otherwise returns local fallback templates
 - Purpose:
-  - Generate practice prompts or passages tailored to either free practice or drill exercises
+  - Generate reading passages tailored to topic keywords, difficulty, or therapy drill objectives
 
-### 3.3 Practice Submission (Module 1)
-- Route: `POST /practice/submit`
-- Inputs:
-  - `audio`
-  - `target_sentence`
-  - optional `exercise_id`, `exercise_title`
-- Flow:
-  1. Receive recording and store temp file
-  2. Convert to WAV via `audio_utils.convert_to_wav`
-  3. Transcribe with Whisper
-  4. Clean both target and spoken text
-  5. Compute WER via `jiwer`
-  6. Score pronunciation as `max(0, min(10, round((1 - wer) * 10, 1)))`
-  7. Align words and collect mismatches
-  8. Persist session to MongoDB under `practice_sessions`
-  9. Return structured pronunciation feedback and streak count
-
-### 3.4 Fluency Analysis (Module 2)
+### 3.3 Module 1: Speech Fluency Tracker & Pronunciation Alignment
 - Route: `POST /analyze/speech`
 - Inputs:
-  - `audio`
-  - optional `target_sentence`
+  - `audio` (multipart audio recording)
+  - optional `target_sentence` (target passage for pronunciation alignment)
   - optional `exercise_id`, `exercise_title`
-- Features evaluated:
-  - duration (`duration_sec`)
-  - word count
-  - speech rate (`wpm`)
-  - filler word count and specific filler types
-  - stammer/repetition count
-  - long pause detection and pause timeline
-  - clarity score derived from average log probability of Whisper segments
-- Scoring engine weights:
-  - filler score: 20%
-  - stammer score: 25%
-  - pause score: 20%
-  - rate score: 20%
-  - clarity score: 15%
-- Score calculation:
-  - filler score: `10 - (filler_rate * COEFF_FILLER)`
-  - stammer score: `10 - (stammer_rate * COEFF_STAMMER)`
-  - pause score: `10 - (pause_rate * COEFF_PAUSE)`
-  - rate score: perfect if 120-150 WPM, otherwise penalized based on distance from target band
-  - clarity score: normalized from Whisper segment logprob
-- Persisted in `analysis_sessions`
-- Feedback includes recommended drills and optional AI pathologist commentary
+- Flow & Features Evaluated:
+  1. Receive recording and convert to 16 kHz mono WAV via `audio_utils.convert_to_wav`
+  2. Transcribe speech using Whisper ASR with segment confidence logging
+  3. If `target_sentence` provided:
+     - Clean both target and spoken text
+     - Compute Word Error Rate (WER) via `jiwer`
+     - Align words and record mismatched words
+  4. Disfluency analytics:
+     - duration (`duration_sec`) and word count
+     - speech rate (`wpm`)
+     - filler word count and specific filler types (`filler_details`)
+     - stammer / repetition count and timestamps (`stammer_details`)
+     - long pause detection (>1.5s) and timestamps (`pause_details`)
+     - acoustic clarity score derived from Whisper segment log probabilities
+  5. Composite Fluency Scoring (0–10 scale):
+     - filler score: 20%
+     - stammer score: 25%
+     - pause score: 20%
+     - rate score: 20% (ideal: 120–150 WPM)
+     - clarity score: 15%
+  6. Clinical recommendations and optional Groq AI pathologist feedback
+  7. Persist session to MongoDB under `analysis_sessions`
+  8. Return structured metrics, feedback, and streak count
+
+### 3.4 Module 2: Video & Multimodal Communication Analysis
+- Routes:
+  - `POST /video/analyze` — submit video recording for asynchronous background analysis
+  - `GET /video/session/{job_id}` — poll job progress and fetch final multimodal report
+  - `GET /video/reports/{user_id}` — fetch past video communication reports
+  - `DELETE /video/session/{job_id}` — delete session recording
+  - `GET /video/health` — video analysis module health check
+- Features Evaluated:
+  - Visual metrics via MediaPipe Face Mesh & Pose:
+    - Eye contact ratio (% looking toward camera)
+    - Smile ratio (% facial expression positivity)
+    - Head orientation & stability (nodding, tilting, turning)
+    - Shoulder / posture stability (fidgeting, leaning)
+  - Acoustic & verbal metrics via Whisper:
+    - Speech rate (WPM), pauses, fillers, articulation clarity
+  - Multimodal integration:
+    - Visual score (0–100)
+    - Speech score (0–100)
+    - Overall communication impact score (0–100)
+    - Multimodal coaching feedback & improvement tips
 
 ### 3.5 Exercise Drills & Recommendations
 - Route: `GET /exercises`
@@ -137,37 +143,47 @@ SpeechAI is an AI-driven speech therapy and fluency training system. It provides
   - streak count
   - average practice score
   - average fluency score
-  - line charts for practice and fluency progress
-  - history timeline tabs for practice, analysis, exercise
-- History is grouped by `session_category`
-  - `practice`
-  - `analysis`
-  - `exercise`
+  - total fluency sessions count
+  - line chart for Module 1 Fluency Progress Trend (0–10 scale)
+  - history timeline tabs for Module 1 Fluency and Exercise History
+- History is grouped by `type`:
+  - `analysis` (Module 1)
+  - `exercise` (Therapy drills)
 
-### 5.2 Practice Module
-- Uses browser microphone to record audio
-- Uses either the user-entered target or AI-generated practice passage
-- Sends audio to `POST /practice/submit`
-- Displays: pronunciation score, WER, mismatched words, streak updates
-- Supports exercise drill targets when active exercise selected
+### 5.2 Module 1: Fluency Tracker
+- Uses browser microphone to record speech audio
+- Supports both impromptu speaking (prompt cards) and guided passage reading (Groq AI generator or custom text)
+- Sends audio to `POST /analyze/speech`
+- Displays:
+  - Overall Fluency Score (0–10)
+  - Interactive waveform playback and user audio review
+  - Disfluency timelines and tagged chips for filler words, stammers, and long pauses
+  - Real-time client speech recognition feed (Web Speech API)
+  - Pronunciation word alignment & accuracy when practicing with a target reading passage
+  - Five sub-scores (filler, stammer, pause, rate, clarity)
+  - Therapy feedback and recommended clinical exercises
 
-### 5.3 Fluency Module
-- Records live audio
-- Sends to `POST /analyze/speech`
-- Displays: fluency score, wpm, filler count, stammer events, long pauses, clarity
-- Also shows dynamic visual timeline of pause segments and AI feedback
+### 5.3 Module 2: Video & Communication Analysis
+- Records or uploads video files (.mp4, .webm)
+- Sends video to `POST /video/analyze`
+- Displays:
+  - Multimodal Communication Score (0–100)
+  - Visual breakdown: eye contact ratio, smile ratio, head pose stability, posture stability
+  - Verbal breakdown: speech rate (WPM), pauses, fillers, articulation clarity
+  - Multimodal coaching advice and improvement guidance
 
 ### 5.4 Exercise Library
-- Lists drill exercises and instruction details
-- Launches an exercise and optionally generates text specific to drill intent
-- Evaluates using either practice or analysis route depending on drill type
+- Lists drill exercises and instruction details loaded from MongoDB
+- Launches exercises with configurable difficulty (beginner, intermediate, advanced)
+- Offers preset clinical sentences, custom passages, or AI-generated drill texts
+- Evaluates drills via `POST /analyze/speech`, providing pronunciation alignment, pacing, and fluency feedback
 
 ## 6. Scientific Rationale Behind Evaluated Parameters
 ### 6.1 Pronunciation Accuracy
-- Uses Word Error Rate (WER)
+- Uses Word Error Rate (WER) via `jiwer`
 - WER indicates pronunciation correctness relative to a target sentence
 - Converts WER into a 0-10 accuracy score
-- Useful for articulation practice and mismatch detection
+- Useful for articulation drills and mismatch detection
 
 ### 6.2 Speech Rate (WPM)
 - Ideal range targeted: 120–150 WPM
@@ -195,6 +211,11 @@ SpeechAI is an AI-driven speech therapy and fluency training system. It provides
 - Higher confidence suggests better quality of speech capture and likely clearer pronunciation
 - Included as a final combined metric for holistic fluency
 
+### 6.7 Multimodal Visual Signals (Module 2)
+- Eye contact indicates listener connection and confidence
+- Smile ratio measures warmth and engagement
+- Head and posture stability reflect composed physical presence
+
 ## 7. API Endpoints Summary
 ### Public / data APIs
 - `GET /` — health check root
@@ -206,38 +227,45 @@ SpeechAI is an AI-driven speech therapy and fluency training system. It provides
 - `POST /auth/register` — register user
 - `POST /auth/login` — login user
 
-### Analysis APIs
-- `POST /practice/submit` — practice pronunciation submission and scoring
-- `POST /analyze/speech` — fluency analysis, scoring, and feedback
-- `GET /tts/generate` — TTS generation (Edge TTS based; optional backend feature)
+### Module 1: Fluency & Speech Analysis APIs
+- `POST /analyze/speech` — speech fluency and pronunciation analysis, scoring, and clinical recommendations
+- `GET /tts/generate` — TTS reference audio playback (edge-tts / browser synthesis fallback)
+
+### Module 2: Video & Communication Analysis APIs
+- `POST /video/analyze` — submit video recording for asynchronous background analysis
+- `GET /video/session/{job_id}` — poll job state and fetch multimodal report
+- `GET /video/reports/{user_id}` — fetch past video communication reports
+- `DELETE /video/session/{job_id}` — delete session recording
+- `GET /video/health` — video analysis module health check
 
 ## 8. System Diagram (Textual)
 ```text
 [Browser UI] -- HTTP --> [FastAPI Backend]
       |                    |-- Whisper transcription
-      |                    |-- jiwer WER scoring
+      |                    |-- jiwer WER & word alignment
       |                    |-- filler/stammer/pause analysis
-      |                    |-- AI text generation (Groq) if API key configured
+      |                    |-- MediaPipe FaceMesh & Pose (Module 2)
+      |                    |-- AI text generation (Groq) if configured
       |                    |-- MongoDB persistence
       V                    |-- User auth token verification
   React + Recharts UI        V
       |                 [MongoDB Database]
       |-- exercises       |-- users
-      |-- reports         |-- practice_sessions
-      |-- practice submit |-- analysis_sessions
-      |-- analyze speech  
+      |-- reports         |-- analysis_sessions
+      |-- Module 1 audio  |-- video_analysis_jobs
+      |-- Module 2 video  
 ```
 
 ## 9. How Everything Works End-to-End
 1. User opens the app and the frontend loads exercises plus report history
 2. User selects a module:
-   - Practice: record audio and compare against target text
-   - Fluency: record audio and analyze pace, filler, stammer, pauses
-   - Exercises: choose a drill and either practice or analyze depending on drill type
-3. Frontend sends audio and metadata to backend
-4. Backend processes audio, transcribes speech, computes metrics, stores session
+   - Module 1: Fluency Tracker (impromptu speaking, custom passage reading, pronunciation alignment, disfluency tracking)
+   - Module 2: Video Analysis (multimodal facial expressions, eye contact, posture, and speech metrics)
+   - Exercises: choose a drill and practice with beginner, intermediate, or advanced passages
+3. Frontend sends media and metadata to backend
+4. Backend processes audio/video, transcribes speech, computes metrics, stores session
 5. Frontend displays scores, charts, timeline, and recommendations
-6. User can repeat practice, view history, and self-monitor progress
+6. User can repeat drills, view history, and self-monitor progress
 
 ## 10. Key Notes
 - The system separates raw session intent from evaluation category using `session_category`

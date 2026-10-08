@@ -5,7 +5,7 @@ import logging
 from typing import List, Tuple
 from video_module.config import FRAME_SAMPLE_FPS
 
-logger = logging.getLogger("Module3_FrameSampler")
+logger = logging.getLogger("Module2_FrameSampler")
 
 def sample_frames(video_path: str, output_dir: str, fps: float = FRAME_SAMPLE_FPS) -> List[Tuple[float, str]]:
     """

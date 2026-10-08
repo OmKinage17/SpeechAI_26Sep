@@ -12,14 +12,6 @@ interface MismatchedWord {
   index: number;
 }
 
-interface PracticeResult {
-  spoken_text: string;
-  target_text: string;
-  word_error_rate: number;
-  pronunciation_score: number;
-  mismatched_words: MismatchedWord[];
-  streak_count?: number;
-}
 
 interface PauseDetail {
   start: number;
@@ -120,18 +112,6 @@ interface User {
   email: string;
 }
 
-const SAMPLE_SENTENCES = [
-  "The quick brown fox jumps over the lazy dog.",
-  "Practice makes a man perfect, especially in language skills.",
-  "Clear communication is essential for professional success.",
-  "Indian English speakers often have a unique and expressive rhythm.",
-  "She sells seashells by the seashore, and the shells she sells are surely seashells.",
-  "Peter Piper picked a peck of pickled peppers; did Peter Piper pick a peck of pickled peppers?",
-  "Rhythm and timing are crucial when delivering a public speech to a large audience.",
-  "A steady breathing pattern helps reduce stammering and speech blocks during conversation.",
-  "Innovations in artificial intelligence are rapidly shaping our global communication systems.",
-  "The beautiful blue butterfly fluttered gracefully over the bright yellow blossoms in the garden."
-];
 
 const TOPIC_PROMPTS = [
   "Explain what you had for breakfast today, or talk about a recent movie you watched.",
@@ -412,7 +392,7 @@ const renderHighlightedTranscript = (transcript?: string, fillerWords: string[] 
 };
 
 function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'practice' | 'fluency' | 'exercises' | 'video'>(() => {
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'fluency' | 'video' | 'exercises'>(() => {
     const searchParams = new URLSearchParams(window.location.search);
     const path = window.location.pathname.toLowerCase();
     const hash = window.location.hash.toLowerCase();
@@ -421,7 +401,7 @@ function App() {
       return 'video';
     }
     const tab = searchParams.get('tab');
-    if (tab === 'practice' || tab === 'fluency' || tab === 'exercises' || tab === 'dashboard') {
+    if (tab === 'fluency' || tab === 'exercises' || tab === 'dashboard') {
       return tab;
     }
     return 'dashboard';
@@ -442,13 +422,11 @@ function App() {
   const ttsAbortControllerRef = useRef<AbortController | null>(null);
   const activeAudioRequestIdRef = useRef<number>(0);
   
-  // Module 1 specific
-  const [targetSentence, setTargetSentence] = useState(SAMPLE_SENTENCES[0]);
-  const [practiceResult, setPracticeResult] = useState<PracticeResult | null>(null);
-  
-  // Module 2 specific
+  // Module 1 specific (Fluency Tracker)
   const [promptIndex, setPromptIndex] = useState(0);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
+  const [fluencyTargetText, setFluencyTargetText] = useState('');
+  const [configTabM1, setConfigTabM1] = useState<'prompt' | 'groq'>('prompt');
   
   // Persistence / DB state
   const [streakCount, setStreakCount] = useState(0);
@@ -457,7 +435,7 @@ function App() {
   const [exerciseSearch, setExerciseSearch] = useState('');
   
   // Swappable history tab & detailed expander state
-  const [historyTab, setHistoryTab] = useState<'practice' | 'analysis' | 'exercise'>('practice');
+  const [historyTab, setHistoryTab] = useState<'analysis' | 'exercise'>('analysis');
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
 
   // Groq AI practice text generator states
@@ -466,14 +444,11 @@ function App() {
   const [aiFocusExercise] = useState('none');
   const [aiEnglishLevel, setAiEnglishLevel] = useState<'easy' | 'medium' | 'difficult'>('medium');
   const [isGenerating, setIsGenerating] = useState(false);
-  const [fluencyTargetText, setFluencyTargetText] = useState('');
-  const [configTabM1, setConfigTabM1] = useState<'presets' | 'custom' | 'groq'>('presets');
-  const [configTabM2, setConfigTabM2] = useState<'prompt' | 'groq'>('prompt');
 
   // Exercise detail modal/instructions view state
   const [activeExerciseDetail, setActiveExerciseDetail] = useState<Exercise | null>(null);
   const [exerciseTargetText, setExerciseTargetText] = useState('');
-  const [configTabExM1, setConfigTabExM1] = useState<'presets' | 'custom' | 'groq'>('presets');
+  const [configTabExercise, setConfigTabExercise] = useState<'presets' | 'custom' | 'groq'>('presets');
   const [exerciseDifficulty, setExerciseDifficulty] = useState<'beginner' | 'intermediate' | 'advanced'>('beginner');
 
   const normalizeTtsText = (text: string) => {
@@ -500,10 +475,9 @@ function App() {
     setExerciseTargetText(defaultPresets[0] || "Read this target passage out loud to practice and track your speech parameters.");
 
     // Reset settings config tab
-    setConfigTabExM1('presets');
+    setConfigTabExercise('presets');
 
     // Reset past results/playback states to prevent leak
-    setPracticeResult(null);
     setAnalysisResult(null);
     setAudioUrl(null);
     setStatus('idle');
@@ -593,9 +567,8 @@ function App() {
           const inferredType = session.type
             || (session.session_category === 'exercise' ? 'exercise'
               : session.session_category === 'analysis' ? 'analysis'
-              : session.session_category === 'practice' ? 'practice'
               : hasExerciseMeta ? 'exercise'
-              : 'practice');
+              : 'analysis');
           return {
             ...session,
             type: inferredType,
@@ -605,8 +578,7 @@ function App() {
 
         const availableTypes = new Set(normalizedSessions.map((session: any) => session.type));
         if (!availableTypes.has(historyTab)) {
-          if (availableTypes.has('practice')) setHistoryTab('practice');
-          else if (availableTypes.has('analysis')) setHistoryTab('analysis');
+          if (availableTypes.has('analysis')) setHistoryTab('analysis');
           else if (availableTypes.has('exercise')) setHistoryTab('exercise');
         }
       }
@@ -634,14 +606,9 @@ function App() {
       const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
-        if (activeTab === 'practice') {
-          setTargetSentence(data.text);
-          setPracticeResult(null);
-        } else {
-          setFluencyTargetText(data.text);
-          setAnalysisResult(null);
-        }
-        alert(`Practice text (${aiEnglishLevel.toUpperCase()} English level) generated successfully using ${data.source}!`);
+        setFluencyTargetText(data.text);
+        setAnalysisResult(null);
+        alert(`Target passage (${aiEnglishLevel.toUpperCase()} English level) generated successfully using ${data.source}!`);
       } else {
         throw new Error("Failed to generate text");
       }
@@ -661,7 +628,6 @@ function App() {
       if (res.ok) {
         const data = await res.json();
         setExerciseTargetText(data.text);
-        setPracticeResult(null);
         setAnalysisResult(null);
         alert(`Practice text generated successfully using ${data.source}!`);
       } else {
@@ -736,7 +702,6 @@ function App() {
     try {
       setLiveTranscript('');
       setAudioUrl(null);
-      setPracticeResult(null);
       setAnalysisResult(null);
       audioBlobRef.current = null;
       
@@ -808,30 +773,14 @@ function App() {
     const formData = new FormData();
     formData.append('audio', blob, 'recording.webm');
     
-    // Determine if the task is practice (pronunciation correction) type
-    const isPracticeType = activeTab === 'practice' || (
-      activeTab === 'exercises' && activeExerciseDetail && 
-      ["silent_pause_drill", "slow_rate_reading", "articulation_drill"].includes(activeExerciseDetail._id)
-    );
-    
-    let url = 'http://127.0.0.1:8000/analyze/speech';
-    if (isPracticeType) {
-      url = 'http://127.0.0.1:8000/practice/submit';
-      const text = activeTab === 'exercises' ? exerciseTargetText : targetSentence;
+    const url = 'http://127.0.0.1:8000/analyze/speech';
+    const text = activeTab === 'exercises' ? exerciseTargetText : fluencyTargetText;
+    if (text) {
       formData.append('target_sentence', text);
-      if (activeTab === 'exercises' && activeExerciseDetail) {
-        formData.append('exercise_id', activeExerciseDetail._id);
-        formData.append('exercise_title', activeExerciseDetail.title);
-      }
-    } else {
-      const text = activeTab === 'exercises' ? exerciseTargetText : fluencyTargetText;
-      if (text) {
-        formData.append('target_sentence', text);
-      }
-      if (activeTab === 'exercises' && activeExerciseDetail) {
-        formData.append('exercise_id', activeExerciseDetail._id);
-        formData.append('exercise_title', activeExerciseDetail.title);
-      }
+    }
+    if (activeTab === 'exercises' && activeExerciseDetail) {
+      formData.append('exercise_id', activeExerciseDetail._id);
+      formData.append('exercise_title', activeExerciseDetail.title);
     }
 
     const token = localStorage.getItem('speechai_token');
@@ -852,19 +801,14 @@ function App() {
       }
       
       const data = await response.json();
-      
-      if (isPracticeType) {
-        setPracticeResult(data);
-        if (data.pronunciation_score >= 80 || (data.pronunciation_score >= 8 && data.pronunciation_score <= 10)) {
-          confetti({
-            particleCount: 120,
-            spread: 80,
-            colors: ['#6366f1', '#a855f7', '#10b981'],
-            origin: { y: 0.6 }
-          });
-        }
-      } else {
-        setAnalysisResult(data);
+      setAnalysisResult(data);
+      if (data.final_score >= 8.0) {
+        confetti({
+          particleCount: 120,
+          spread: 80,
+          colors: ['#6366f1', '#a855f7', '#10b981'],
+          origin: { y: 0.6 }
+        });
       }
       
       if (data.streak_count !== undefined) {
@@ -881,121 +825,12 @@ function App() {
     }
   };
 
-  const renderWordDiff = () => {
-    if (!practiceResult) return null;
-    
-    const targetWords = targetSentence.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "").split(/\s+/);
-    const mismatchedIndices = new Set(practiceResult.mismatched_words.map(w => w.index));
-    
-    const handlePlayWord = (w: string) => {
-      speakText(w);
-    };
-
-    return (
-      <div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-          {targetWords.map((word, index) => {
-            let className = "practice-word";
-            if (mismatchedIndices.has(index)) {
-              className += " incorrect";
-            } else {
-              className += " correct";
-            }
-            return (
-              <span key={index} className={className} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                {word}
-                {mismatchedIndices.has(index) && (
-                  <button 
-                    onClick={() => handlePlayWord(targetWords[index])}
-                    className="tts-word-play"
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      cursor: 'pointer',
-                      padding: '2px',
-                      marginLeft: '2px',
-                      color: 'var(--error)',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      borderRadius: '4px'
-                    }}
-                    title={`Hear correct pronunciation: ${word}`}
-                  >
-                    <Volume2 size={12} />
-                  </button>
-                )}{' '}
-              </span>
-            );
-          })}
-        </div>
-
-        <div className="tts-controls" style={{ marginTop: '16px', display: 'flex', gap: '10px' }}>
-          <button 
-            className="tts-btn" 
-            onClick={() => (isAudioPlaying || isAudioLoading) && currentAudioType === 'reference' ? stopPlayback() : speakText(targetSentence)}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '6px',
-              fontSize: '12px',
-              fontWeight: '600',
-              padding: '6px 12px',
-              backgroundColor: 'rgba(255, 255, 255, 0.03)',
-              border: '1px solid var(--border-color)',
-              borderRadius: 'var(--radius-sm)',
-              color: 'var(--text-primary)',
-              cursor: 'pointer',
-              transition: 'var(--transition-fast)'
-            }}
-          >
-            {(isAudioPlaying || isAudioLoading) && currentAudioType === 'reference' ? (
-              <Square size={14} style={{ color: 'var(--error)' }} />
-            ) : (
-              <Volume2 size={14} style={{ color: 'var(--primary)' }} />
-            )}
-            {(isAudioPlaying || isAudioLoading) && currentAudioType === 'reference' ? 'Stop' : 'Listen Reference'}
-          </button>
-          {audioUrl && (
-            <button 
-              className="tts-btn" 
-              onClick={() => playUserRecording()}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                fontSize: '12px',
-                fontWeight: '600',
-                padding: '6px 12px',
-                backgroundColor: 'rgba(255, 255, 255, 0.03)',
-                border: '1px solid var(--border-color)',
-                borderRadius: 'var(--radius-sm)',
-                color: 'var(--text-primary)',
-                cursor: 'pointer',
-                transition: 'var(--transition-fast)'
-              }}
-            >
-              {(isAudioPlaying || isAudioLoading) && currentAudioType === 'recording' ? (
-                <Square size={14} style={{ color: 'var(--error)' }} />
-              ) : (
-                <Play size={14} style={{ color: 'var(--success)' }} />
-              )}
-              {(isAudioPlaying || isAudioLoading) && currentAudioType === 'recording' ? 'Stop' : 'Play My Recording'}
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  };
-
-
   const getLiveWordColorClass = (_targetWord: string, index: number): string => {
     if (!liveTranscript) {
       return index === 0 ? 'practice-word current' : 'practice-word default';
     }
 
-    const currentTarget = activeTab === 'practice'
-      ? targetSentence
-      : (activeTab === 'exercises' ? exerciseTargetText : fluencyTargetText);
+    const currentTarget = activeTab === 'exercises' ? exerciseTargetText : fluencyTargetText;
     const targetWords = currentTarget.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "").toLowerCase().split(/\s+/).filter(Boolean);
     const liveWords = liveTranscript.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "").toLowerCase().split(/\s+/).filter(Boolean);
 
@@ -1246,20 +1081,7 @@ function App() {
     }
   };
 
-  // Recharts Practice Progress Chart data formulation (Scale 0-10)
-  const practiceChartData = [...sessionHistory]
-    .reverse()
-    .filter(s => s.session_category === 'practice' || s.type === 'practice')
-    .map((session, idx) => {
-      const date = new Date(session.created_at);
-      const label = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
-      return {
-        name: `${label} - p${idx}`,
-        Score: session.pronunciation_score ?? 0,
-      };
-    });
-
-  // Recharts Fluency Progress Chart data formulation (Scale 0-100)
+  // Recharts Fluency Progress Chart data formulation (Scale 0-10)
   const fluencyChartData = [...sessionHistory]
     .reverse()
     .filter(s => s.session_category === 'analysis' || s.type === 'analysis')
@@ -1273,11 +1095,7 @@ function App() {
     });
 
   // Calculate Dashboard Averages
-  const practiceSessions = sessionHistory.filter(s => s.session_category === 'practice' || s.type === 'practice');
   const analysisSessions = sessionHistory.filter(s => s.session_category === 'analysis' || s.type === 'analysis');
-  const avgAccuracy = practiceSessions.length > 0
-    ? (practiceSessions.reduce((acc, curr) => acc + (curr.pronunciation_score ?? 0), 0) / practiceSessions.length).toFixed(1)
-    : '0.0';
   const avgFluency = analysisSessions.length > 0
     ? (analysisSessions.reduce((acc, curr) => acc + (curr.final_score ?? 0), 0) / analysisSessions.length).toFixed(1)
     : '0.0';
@@ -1294,14 +1112,13 @@ function App() {
     if (historyTab === 'exercise') {
       return s.session_category === 'exercise' || s.type === 'exercise';
     }
-    return (historyTab === 'practice' && (s.session_category === 'practice' || s.type === 'practice'))
-      || (historyTab === 'analysis' && (s.session_category === 'analysis' || s.type === 'analysis'));
+    return s.session_category === 'analysis' || s.type === 'analysis';
   });
 
   const visibleHistory = filteredHistory;
 
-  // Reset all ephemeral practice, analysis, recording, and transcript activity data
-  const resetActivityState = (targetTab?: 'dashboard' | 'practice' | 'fluency' | 'exercises' | 'video', keepExerciseDetail = false) => {
+  // Reset all ephemeral analysis, recording, and transcript activity data
+  const resetActivityState = (targetTab?: 'dashboard' | 'fluency' | 'exercises' | 'video', keepExerciseDetail = false) => {
     // 1. Immediately stop any TTS or recorded audio playback
     stopPlayback();
 
@@ -1331,27 +1148,24 @@ function App() {
     setStatusMessage('Ready to record');
 
     // 5. Clear module evaluation results
-    setPracticeResult(null);
     setAnalysisResult(null);
 
     // 6. Reset target passages and prompts to default fresh state
-    setTargetSentence(SAMPLE_SENTENCES[0]);
-    setConfigTabM1('presets');
     setFluencyTargetText('');
     setPromptIndex(0);
-    setConfigTabM2('prompt');
+    setConfigTabM1('prompt');
 
     // 7. Clear exercise drill if leaving exercises
     if (!keepExerciseDetail && targetTab !== 'exercises') {
       setActiveExerciseDetail(null);
       setExerciseTargetText('');
-      setConfigTabExM1('presets');
+      setConfigTabExercise('presets');
     }
   };
 
   const prevTabRef = useRef(activeTab);
 
-  const handleTabChange = (newTab: 'dashboard' | 'practice' | 'fluency' | 'exercises' | 'video', keepExerciseDetail = false) => {
+  const handleTabChange = (newTab: 'dashboard' | 'fluency' | 'exercises' | 'video', keepExerciseDetail = false) => {
     prevTabRef.current = newTab;
     resetActivityState(newTab, keepExerciseDetail);
     setActiveTab(newTab);
@@ -1378,17 +1192,13 @@ function App() {
             <LayoutDashboard size={16} />
             <span>Dashboard</span>
           </button>
-          <button className={`nav-tab-btn ${activeTab === 'practice' ? 'active' : ''}`} onClick={() => handleTabChange('practice')}>
-            <BookOpen size={16} />
-            <span><span className="nav-module-prefix">Module 1: </span>Practice</span>
-          </button>
           <button className={`nav-tab-btn ${activeTab === 'fluency' ? 'active' : ''}`} onClick={() => handleTabChange('fluency')}>
             <BarChart3 size={16} />
-            <span><span className="nav-module-prefix">Module 2: </span>Fluency</span>
+            <span><span className="nav-module-prefix">Module 1: </span>Fluency</span>
           </button>
           <button className={`nav-tab-btn ${activeTab === 'video' ? 'active' : ''}`} onClick={() => handleTabChange('video')}>
             <VideoIcon size={16} />
-            <span><span className="nav-module-prefix">Module 3: </span>Video</span>
+            <span><span className="nav-module-prefix">Module 2: </span>Video</span>
           </button>
           <button className={`nav-tab-btn ${activeTab === 'exercises' ? 'active' : ''}`} onClick={() => handleTabChange('exercises')}>
             <Compass size={16} />
@@ -1427,8 +1237,8 @@ function App() {
         {activeTab === 'dashboard' && (
           <div className="view-fade">
             <div className="dashboard-hero">
-              <h1 className="hero-title">Speech Practice & Analytical Dashboard</h1>
-              <p className="hero-subtitle">Monitor your pronunciation accuracy, disfluency counts, and daily practice streaks in one place.</p>
+              <h1 className="hero-title">Speech Fluency & Analytical Dashboard</h1>
+              <p className="hero-subtitle">Monitor your speech fluency scores, disfluency counts, and daily practice streaks in one place.</p>
             </div>
 
             <div className="dashboard-grid">
@@ -1446,68 +1256,36 @@ function App() {
                     {streakCount} <span style={{ fontSize: '20px', color: 'var(--text-secondary)' }}>Days</span>
                   </div>
                   <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-                    {streakCount > 0 ? "Fantastic! Keep up the daily practice rhythm." : "Start a practice drill to begin your daily streak!"}
+                    {streakCount > 0 ? "Fantastic! Keep up the daily practice rhythm." : "Start a speech drill to begin your daily streak!"}
                   </p>
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
                   <div className="glass-card stat-metric-box">
-                    <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Practice Accuracy (Avg)</span>
-                    <div style={{ fontSize: '24px', fontWeight: 'bold', color: 'var(--primary)', marginTop: '8px' }}>{avgAccuracy}/10</div>
+                    <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Speech Fluency (Avg)</span>
+                    <div style={{ fontSize: '24px', fontWeight: 'bold', color: 'var(--primary)', marginTop: '8px' }}>{avgFluency}/10</div>
                   </div>
                   <div className="glass-card stat-metric-box">
-                    <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Speech Fluency (Avg)</span>
-                    <div style={{ fontSize: '24px', fontWeight: 'bold', color: 'var(--secondary)', marginTop: '8px' }}>{avgFluency}/10</div>
+                    <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Total Fluency Sessions</span>
+                    <div style={{ fontSize: '24px', fontWeight: 'bold', color: 'var(--secondary)', marginTop: '8px' }}>{analysisSessions.length}</div>
                   </div>
                 </div>
               </div>
 
-              {/* Right Column: Two Separate Recharts Line Graphs */}
+              {/* Right Column: Fluency Progress Chart */}
               <div className="dashboard-column" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                {/* 1. Practice Accuracy Trend */}
                 <div className="glass-card chart-container-card">
                   <h3 style={{ fontSize: '16px', fontWeight: '700', color: 'var(--text-primary)', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <BarChart3 size={20} style={{ color: 'var(--primary)' }} />
-                    Practice Accuracy Trend (Scale 0-10)
-                  </h3>
-                  {practiceSessions.length === 0 ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '180px', color: 'var(--text-muted)' }}>
-                      <HelpCircle size={32} style={{ marginBottom: '10px' }} />
-                      <p style={{ fontSize: '13px' }}>No practice sessions logged yet.</p>
-                    </div>
-                  ) : (
-                    <div style={{ width: '100%', height: 180 }}>
-                      <ResponsiveContainer width="100%" height="100%">
-                        <LineChart data={practiceChartData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                          <XAxis dataKey="name" tickFormatter={(val) => val.split(' - ')[0]} stroke="var(--text-muted)" fontSize={10} tickLine={false} />
-                          <YAxis domain={[0, 10]} ticks={[0, 2, 4, 6, 8, 10]} stroke="var(--text-muted)" fontSize={10} tickLine={false} />
-                          <Tooltip 
-                            contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)', borderRadius: 'var(--radius-sm)' }}
-                            labelStyle={{ color: 'var(--text-primary)', fontWeight: 'bold' }}
-                            labelFormatter={(label) => typeof label === 'string' ? label.split(' - ')[0] : ''}
-                            formatter={(value: any) => [`${value}/10`, 'Pronunciation Score']}
-                          />
-                          <Line type="monotone" dataKey="Score" stroke="var(--primary)" strokeWidth={3} activeDot={{ r: 6 }} dot={{ r: 3 }} />
-                        </LineChart>
-                      </ResponsiveContainer>
-                    </div>
-                  )}
-                </div>
-
-                {/* 2. Fluency Progress Trend */}
-                <div className="glass-card chart-container-card">
-                  <h3 style={{ fontSize: '16px', fontWeight: '700', color: 'var(--text-primary)', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <Activity size={20} style={{ color: 'var(--accent)' }} />
-                    Fluency Progress Trend (Scale 0-10)
+                    <Activity size={20} style={{ color: 'var(--primary)' }} />
+                    Module 1: Fluency Progress Trend (Scale 0-10)
                   </h3>
                   {analysisSessions.length === 0 ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '180px', color: 'var(--text-muted)' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '220px', color: 'var(--text-muted)' }}>
                       <HelpCircle size={32} style={{ marginBottom: '10px' }} />
                       <p style={{ fontSize: '13px' }}>No fluency analysis sessions logged yet.</p>
                     </div>
                   ) : (
-                    <div style={{ width: '100%', height: 180 }}>
+                    <div style={{ width: '100%', height: 220 }}>
                       <ResponsiveContainer width="100%" height="100%">
                         <LineChart data={fluencyChartData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
                           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
@@ -1519,7 +1297,7 @@ function App() {
                             labelFormatter={(label) => typeof label === 'string' ? label.split(' - ')[0] : ''}
                             formatter={(value: any) => [`${value}/10`, 'Fluency Score']}
                           />
-                          <Line type="monotone" dataKey="Score" stroke="var(--accent)" strokeWidth={3} activeDot={{ r: 6 }} dot={{ r: 3 }}>
+                          <Line type="monotone" dataKey="Score" stroke="var(--primary)" strokeWidth={3} activeDot={{ r: 6 }} dot={{ r: 3 }}>
                             <LabelList dataKey="Score" position="top" style={{ fill: 'var(--text-primary)', fontSize: '10px' }} />
                           </Line>
                         </LineChart>
@@ -1536,25 +1314,18 @@ function App() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   <History size={22} style={{ color: 'var(--primary)' }} />
                   <h3 style={{ fontSize: '18px', fontWeight: '700', color: 'var(--text-primary)' }}>
-                    {historyTab === 'practice' ? 'Practice History' : historyTab === 'analysis' ? 'Fluency History' : 'Exercise History'}
+                    {historyTab === 'analysis' ? 'Fluency History (Module 1)' : 'Exercise History'}
                   </h3>
                 </div>
 
                 {/* Sub-tab Swapper */}
                 <div style={{ display: 'flex', gap: '6px', backgroundColor: 'rgba(255,255,255,0.02)', padding: '2px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
                   <button 
-                    className={`nav-tab-btn ${historyTab === 'practice' ? 'active' : ''}`}
-                    onClick={() => { setHistoryTab('practice'); setExpandedSessionId(null); }}
-                    style={{ fontSize: '12px', padding: '6px 12px' }}
-                  >
-                    Module 1: Practice
-                  </button>
-                  <button 
                     className={`nav-tab-btn ${historyTab === 'analysis' ? 'active' : ''}`}
                     onClick={() => { setHistoryTab('analysis'); setExpandedSessionId(null); }}
                     style={{ fontSize: '12px', padding: '6px 12px' }}
                   >
-                    Module 2: Fluency
+                    Module 1: Fluency
                   </button>
                   <button 
                     className={`nav-tab-btn ${historyTab === 'exercise' ? 'active' : ''}`}
@@ -1919,410 +1690,11 @@ function App() {
           </div>
         )}
 
-        {/* 2. MODULE 1: PRACTICE MODULE */}
-        {activeTab === 'practice' && (
-          <div className="view-fade">
-            <div className="dashboard-hero" style={{ marginBottom: '24px' }}>
-              <h1 className="hero-title">Module 1: Practice Trainer</h1>
-              <p className="hero-subtitle">Read the target passage aloud. Whisper grades your articulation accuracy.</p>
-            </div>
-
-            {/* Top Full-Width Target Pronunciation Box */}
-            <div className="glass-card" style={{ marginBottom: '24px', textAlign: 'left' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                <h3 style={{ fontSize: '13px', fontWeight: 'bold', color: 'var(--text-secondary)', margin: '0', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                  📖 Target Practice Text
-                </h3>
-                <button
-                  onClick={() => (isAudioPlaying || isAudioLoading) && currentAudioType === 'reference' ? stopPlayback() : speakText(targetSentence)}
-                  className="tts-btn"
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    fontSize: '12px',
-                    fontWeight: '600',
-                    padding: '6px 12px',
-                    backgroundColor: 'rgba(255, 255, 255, 0.03)',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: 'var(--radius-sm)',
-                    color: 'var(--text-primary)',
-                    cursor: 'pointer',
-                    transition: 'var(--transition-fast)',
-                    marginTop: '0'
-                  }}
-                >
-                  {(isAudioPlaying || isAudioLoading) && currentAudioType === 'reference' ? (
-                    <Square size={14} style={{ color: 'var(--error)' }} />
-                  ) : (
-                    <Volume2 size={14} style={{ color: 'var(--primary)' }} />
-                  )}
-                  {(isAudioPlaying || isAudioLoading) && currentAudioType === 'reference' ? 'Stop' : 'Listen Reference'}
-                </button>
-              </div>
-              {!practiceResult ? (
-                <div className="practice-sentence-box" style={{ fontSize: '18px', lineHeight: '1.6', backgroundColor: 'var(--bg-primary)', border: 'none' }}>
-                  {targetSentence.split(' ').map((word, idx) => (
-                    <span key={idx} className={getLiveWordColorClass(word, idx)}>{word} </span>
-                  ))}
-                </div>
-              ) : (
-                <div className="practice-sentence-box" style={{ fontSize: '18px', lineHeight: '1.6', backgroundColor: 'var(--bg-primary)', border: 'none' }}>
-                  {renderWordDiff()}
-                </div>
-              )}
-            </div>
-
-            <div className="workspace-layout">
-              {/* Left Column: Configuration Controls */}
-              <div className="workspace-panel config-panel">
-                <div>
-                  <h2 className="panel-title">1. Practice Settings</h2>
-                  <p className="panel-subtitle" style={{ marginBottom: '16px' }}>Configure how you want to load or generate target text passages.</p>
-                  
-                  {/* Segmented Sub-Tab Switcher */}
-                  <div style={{ display: 'flex', gap: '4px', backgroundColor: 'rgba(255,255,255,0.02)', padding: '4px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', marginBottom: '20px' }}>
-                    <button 
-                      onClick={() => setConfigTabM1('presets')}
-                      style={{ 
-                        flex: 1, 
-                        padding: '8px', 
-                        fontSize: '12px', 
-                        fontWeight: '600',
-                        backgroundColor: configTabM1 === 'presets' ? 'var(--bg-secondary)' : 'transparent', 
-                        border: configTabM1 === 'presets' ? '1px solid var(--border-color)' : 'none', 
-                        color: configTabM1 === 'presets' ? 'var(--text-primary)' : 'var(--text-secondary)',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        transition: 'var(--transition-fast)'
-                      }}
-                    >
-                      📋 Presets
-                    </button>
-                    <button 
-                      onClick={() => setConfigTabM1('custom')}
-                      style={{ 
-                        flex: 1, 
-                        padding: '8px', 
-                        fontSize: '12px', 
-                        fontWeight: '600',
-                        backgroundColor: configTabM1 === 'custom' ? 'var(--bg-secondary)' : 'transparent', 
-                        border: configTabM1 === 'custom' ? '1px solid var(--border-color)' : 'none', 
-                        color: configTabM1 === 'custom' ? 'var(--text-primary)' : 'var(--text-secondary)',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        transition: 'var(--transition-fast)'
-                      }}
-                    >
-                      ✏ Custom
-                    </button>
-                    <button 
-                      onClick={() => setConfigTabM1('groq')}
-                      style={{ 
-                        flex: 1, 
-                        padding: '8px', 
-                        fontSize: '12px', 
-                        fontWeight: '600',
-                        backgroundColor: configTabM1 === 'groq' ? 'rgba(168, 85, 247, 0.1)' : 'transparent', 
-                        border: configTabM1 === 'groq' ? '1px solid var(--secondary)' : 'none', 
-                        color: configTabM1 === 'groq' ? 'var(--text-primary)' : 'var(--text-secondary)',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        transition: 'var(--transition-fast)'
-                      }}
-                    >
-                      ✨ Groq AI
-                    </button>
-                  </div>
-
-                  {/* Render Tab Content */}
-                  {configTabM1 === 'presets' && (
-                    <div className="form-group" style={{ marginBottom: '0' }}>
-                      <label className="form-label">Select Exercise Template</label>
-                      <select 
-                        style={{ 
-                          padding: '12px', 
-                          backgroundColor: 'var(--bg-primary)', 
-                          color: 'var(--text-primary)',
-                          border: '1px solid var(--border-color)',
-                          borderRadius: 'var(--radius-sm)',
-                          width: '100%',
-                          fontSize: '14px'
-                        }}
-                        value={targetSentence}
-                        onChange={(e) => { setTargetSentence(e.target.value); setPracticeResult(null); }}
-                      >
-                        {SAMPLE_SENTENCES.map((s, idx) => (
-                          <option key={idx} value={s}>{s}</option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-
-                  {configTabM1 === 'custom' && (
-                    <div className="form-group" style={{ marginBottom: '0' }}>
-                      <label className="form-label">Write Custom Target Phrase</label>
-                      <input 
-                        type="text" 
-                        className="form-input"
-                        style={{ padding: '12px', fontSize: '14px' }}
-                        value={targetSentence}
-                        onChange={(e) => { setTargetSentence(e.target.value); setPracticeResult(null); }}
-                        placeholder="Type custom text to practice..."
-                      />
-                    </div>
-                  )}
-
-                  {configTabM1 === 'groq' && (
-                    <div className="glass-card" style={{ padding: '16px', border: '1px solid var(--border-color)', backgroundColor: 'rgba(255,255,255,0.01)' }}>
-                      <h3 style={{ fontSize: '13px', fontWeight: 'bold', color: 'var(--text-primary)', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <Sparkles size={14} style={{ color: 'var(--accent)' }} /> Generate Custom Text with Groq AI
-                      </h3>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        <div className="form-group" style={{ marginBottom: '4px' }}>
-                          <label className="form-label" style={{ fontSize: '10px' }}>Topic Keyword</label>
-                          <input 
-                            type="text" 
-                            className="form-input" 
-                            style={{ padding: '6px 12px', fontSize: '13px' }}
-                            value={aiTopic}
-                            onChange={e => setAiTopic(e.target.value)}
-                            placeholder="Space, Cooking, AI..."
-                          />
-                        </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                          <div className="form-group" style={{ marginBottom: '4px' }}>
-                            <label className="form-label" style={{ fontSize: '10px' }}>Length</label>
-                            <select 
-                              style={{ 
-                                padding: '6px', 
-                                backgroundColor: 'var(--bg-primary)', 
-                                color: 'var(--text-primary)',
-                                border: '1px solid var(--border-color)',
-                                borderRadius: 'var(--radius-sm)',
-                                fontSize: '13px'
-                              }}
-                              value={aiLength}
-                              onChange={e => setAiLength(e.target.value)}
-                            >
-                              <option value="sentence">Sentence</option>
-                              <option value="paragraph">Paragraph</option>
-                              <option value="long_paragraph">Long Paragraph</option>
-                            </select>
-                          </div>
-                          <div className="form-group" style={{ marginBottom: '4px' }}>
-                            <label className="form-label" style={{ fontSize: '10px' }}>Level of English</label>
-                            <select 
-                              style={{ 
-                                padding: '6px', 
-                                backgroundColor: 'var(--bg-primary)', 
-                                color: 'var(--text-primary)',
-                                border: '1px solid var(--border-color)',
-                                borderRadius: 'var(--radius-sm)',
-                                fontSize: '13px'
-                              }}
-                              value={aiEnglishLevel}
-                              onChange={e => setAiEnglishLevel(e.target.value as 'easy' | 'medium' | 'difficult')}
-                            >
-                              <option value="easy">Easy</option>
-                              <option value="medium">Medium</option>
-                              <option value="difficult">Difficult</option>
-                            </select>
-                          </div>
-                        </div>
-                        <button 
-                          onClick={handleGenerateText} 
-                          className="submit-btn" 
-                          disabled={isGenerating}
-                          style={{ padding: '8px', fontSize: '13px', marginTop: '5px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
-                        >
-                          {isGenerating ? (
-                            <>
-                              <RefreshCw size={14} className="spin" /> Generating...
-                            </>
-                          ) : (
-                            <>
-                              <Sparkles size={14} /> Generate with Groq AI
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Right Column: Active Recording Workspace */}
-              <div className="workspace-panel recording-panel">
-                <div>
-                  <h2 className="panel-title">2. Speak & Record</h2>
-                  <p className="panel-subtitle" style={{ marginBottom: '20px' }}>Activate the mic and read the target passage cleanly. The analysis evaluates phoneme accuracy.</p>
-                </div>
-
-                <div className={`recorder-container ${isRecording ? 'recording' : ''}`} style={{ width: '100%', minHeight: '230px', margin: '0', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-                  <div className={`status-badge ${status}`}>
-                    {status === 'recording' && <span className="pulse-dot" style={{ width: '8px', height: '8px', backgroundColor: 'var(--error)', borderRadius: '50%', display: 'inline-block', marginRight: '6px' }}></span>}
-                    {statusMessage}
-                  </div>
-
-                  <div className="record-btn-wrapper">
-                    {!isRecording ? (
-                      <button className="record-btn" onClick={startRecording}>
-                        <Mic size={36} />
-                      </button>
-                    ) : (
-                      <button className="record-btn recording" onClick={stopRecording}>
-                        <Square size={32} />
-                      </button>
-                    )}
-                  </div>
-
-                  {isRecording && (
-                    <div className="visualizer-waves">
-                      <div className="wave-bar"></div>
-                      <div className="wave-bar"></div>
-                      <div className="wave-bar"></div>
-                      <div className="wave-bar"></div>
-                      <div className="wave-bar"></div>
-                      <div className="wave-bar"></div>
-                      <div className="wave-bar"></div>
-                      <div className="wave-bar"></div>
-                    </div>
-                  )}
-
-                  {liveTranscript && (
-                    <div style={{ marginTop: '20px', padding: '10px', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 'var(--radius-sm)', width: '100%', textAlign: 'left' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Client Live Feed (Web Speech):</span>
-                      <p style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>{liveTranscript}...</p>
-                    </div>
-                  )}
-
-                  {audioUrl && !isRecording && (
-                    <div style={{ marginTop: '20px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Playback:</span>
-                      <button
-                        onClick={() => playUserRecording()}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                          fontSize: '12px',
-                          fontWeight: '600',
-                          padding: '6px 12px',
-                          backgroundColor: 'rgba(255, 255, 255, 0.03)',
-                          border: '1px solid var(--border-color)',
-                          borderRadius: 'var(--radius-sm)',
-                          color: 'var(--text-primary)',
-                          cursor: 'pointer',
-                          transition: 'var(--transition-fast)'
-                        }}
-                      >
-                        {(isAudioPlaying || isAudioLoading) && currentAudioType === 'recording' ? (
-                          <Square size={14} style={{ color: 'var(--error)' }} />
-                        ) : (
-                          <Play size={14} style={{ color: 'var(--success)' }} />
-                        )}
-                        {(isAudioPlaying || isAudioLoading) && currentAudioType === 'recording' ? 'Stop' : 'Play My Recording'}
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Practice Accuracy Scorecard */}
-            {practiceResult && (
-              <div className="glass-card result-section" style={{ marginTop: '30px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                  <h3 className="feedback-title" style={{ margin: 0 }}>Pronunciation Analysis</h3>
-                  <button
-                    onClick={() => resetActivityState('practice')}
-                    style={{
-                      fontSize: '12px',
-                      fontWeight: '600',
-                      padding: '6px 14px',
-                      backgroundColor: 'rgba(255, 255, 255, 0.05)',
-                      border: '1px solid var(--border-color)',
-                      borderRadius: 'var(--radius-sm)',
-                      color: 'var(--text-primary)',
-                      cursor: 'pointer',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      transition: 'var(--transition-fast)'
-                    }}
-                    title="Clear current results and start a new practice session"
-                  >
-                    <RefreshCw size={13} />
-                    Start New Practice
-                  </button>
-                </div>
-                <div className="result-grid">
-                  <div className="score-panel">
-                    <div className="score-circle">
-                      <span className="score-val">{practiceResult.pronunciation_score}</span>
-                      <span className="score-label">/ 10</span>
-                    </div>
-                    <h4 className="score-heading">Accuracy Score</h4>
-                    <p className="score-desc">
-                      {practiceResult.pronunciation_score >= 8 ? 'Excellent pronunciation!' : 
-                       practiceResult.pronunciation_score >= 6 ? 'Good, minor errors found.' : 
-                       'Needs practice. Try slowly pronouncing the red words.'}
-                    </p>
-                  </div>
-                  
-                  <div className="feedback-panel">
-                    <h4 className="feedback-title">Detailed Stats</h4>
-                    <ul className="feedback-list">
-                      <li className="feedback-item">
-                        <span className="feedback-bullet">✔</span>
-                        <span>Word Error Rate (WER): <strong>{(practiceResult.word_error_rate * 100).toFixed(0)}%</strong></span>
-                      </li>
-                      <li className="feedback-item">
-                        <span className="feedback-bullet">✔</span>
-                        <span>Spoken text matched: <em>"{practiceResult.spoken_text}"</em></span>
-                      </li>
-                      {practiceResult.mismatched_words.length > 0 && (
-                        <li className="feedback-item" style={{ flexDirection: 'column', gap: '4px' }}>
-                          <span style={{ color: 'var(--error)', fontWeight: 'bold' }}>Mismatched words:</span>
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '4px' }}>
-                            {practiceResult.mismatched_words.map((w, idx) => (
-                              <span key={idx} style={{ backgroundColor: 'var(--error-light)', color: 'var(--error)', padding: '2px 8px', borderRadius: '4px', fontSize: '13px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                                Expected: "{w.expected}" 
-                                <button 
-                                  onClick={() => speakText(w.expected)}
-                                  style={{
-                                    background: 'none',
-                                    border: 'none',
-                                    cursor: 'pointer',
-                                    padding: '0',
-                                    color: 'var(--error)',
-                                    display: 'inline-flex',
-                                    alignItems: 'center'
-                                  }}
-                                  title="Listen to pronunciation"
-                                >
-                                  <Volume2 size={12} />
-                                </button>
-                                → Said: "{w.spoken || '[omitted]'}"
-                              </span>
-                            ))}
-                          </div>
-                        </li>
-                      )}
-                    </ul>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* 3. MODULE 3: FLUENCY MODULE */}
+        {/* 2. MODULE 1: FLUENCY MODULE */}
         {activeTab === 'fluency' && (
           <div className="view-fade">
             <div className="dashboard-hero" style={{ marginBottom: '24px' }}>
-              <h1 className="hero-title">Module 2: Fluency Tracker</h1>
+              <h1 className="hero-title">Module 1: Fluency Tracker</h1>
               <p className="hero-subtitle">Practice impromptu topics or read dynamic target passages to track filler words, pacing, and silences.</p>
             </div>
 
@@ -2413,15 +1785,15 @@ function App() {
                   {/* Segmented Switcher */}
                   <div style={{ display: 'flex', gap: '4px', backgroundColor: 'rgba(255,255,255,0.02)', padding: '4px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', marginBottom: '20px' }}>
                     <button 
-                      onClick={() => setConfigTabM2('prompt')}
+                      onClick={() => setConfigTabM1('prompt')}
                       style={{ 
                         flex: 1, 
                         padding: '8px', 
                         fontSize: '12px', 
                         fontWeight: '600',
-                        backgroundColor: configTabM2 === 'prompt' ? 'var(--bg-secondary)' : 'transparent', 
-                        border: configTabM2 === 'prompt' ? '1px solid var(--border-color)' : 'none', 
-                        color: configTabM2 === 'prompt' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                        backgroundColor: configTabM1 === 'prompt' ? 'var(--bg-secondary)' : 'transparent', 
+                        border: configTabM1 === 'prompt' ? '1px solid var(--border-color)' : 'none', 
+                        color: configTabM1 === 'prompt' ? 'var(--text-primary)' : 'var(--text-secondary)',
                         borderRadius: '4px',
                         cursor: 'pointer',
                         transition: 'var(--transition-fast)'
@@ -2430,15 +1802,15 @@ function App() {
                       💡 Topic Prompts
                     </button>
                     <button 
-                      onClick={() => setConfigTabM2('groq')}
+                      onClick={() => setConfigTabM1('groq')}
                       style={{ 
                         flex: 1, 
                         padding: '8px', 
                         fontSize: '12px', 
                         fontWeight: '600',
-                        backgroundColor: configTabM2 === 'groq' ? 'rgba(168, 85, 247, 0.1)' : 'transparent', 
-                        border: configTabM2 === 'groq' ? '1px solid var(--secondary)' : 'none', 
-                        color: configTabM2 === 'groq' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                        backgroundColor: configTabM1 === 'groq' ? 'rgba(168, 85, 247, 0.1)' : 'transparent', 
+                        border: configTabM1 === 'groq' ? '1px solid var(--secondary)' : 'none', 
+                        color: configTabM1 === 'groq' ? 'var(--text-primary)' : 'var(--text-secondary)',
                         borderRadius: '4px',
                         cursor: 'pointer',
                         transition: 'var(--transition-fast)'
@@ -2449,7 +1821,7 @@ function App() {
                   </div>
 
                   {/* Render content based on sub-tab selection */}
-                  {configTabM2 === 'prompt' && (
+                  {configTabM1 === 'prompt' && (
                     <div className="practice-sentence-box" style={{ fontSize: '15px', fontStyle: 'italic', color: 'var(--text-secondary)', minHeight: '90px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', backgroundColor: 'rgba(255,255,255,0.01)', border: '1px dashed var(--border-color)', padding: '16px' }}>
                       <p style={{ margin: '0' }}>💡 Impromptu Prompt: "{TOPIC_PROMPTS[promptIndex]}"</p>
                       <button 
@@ -2474,7 +1846,7 @@ function App() {
                     </div>
                   )}
 
-                  {configTabM2 === 'groq' && (
+                  {configTabM1 === 'groq' && (
                     <div className="glass-card" style={{ padding: '16px', border: '1px solid var(--border-color)', backgroundColor: 'rgba(255,255,255,0.01)' }}>
                       <h3 style={{ fontSize: '13px', fontWeight: 'bold', color: 'var(--text-primary)', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <Sparkles size={14} style={{ color: 'var(--accent)' }} /> Generate Custom Text with Groq AI
@@ -3171,7 +2543,7 @@ function App() {
                         {(isAudioPlaying || isAudioLoading) && currentAudioType === 'reference' ? 'Stop' : 'Listen Reference'}
                       </button>
                     </div>
-                    {!practiceResult ? (
+                    {!analysisResult ? (
                       <div className="practice-sentence-box" style={{ fontSize: '18px', lineHeight: '1.6', backgroundColor: 'var(--bg-primary)', border: 'none' }}>
                         {exerciseTargetText.split(' ').map((word, idx) => (
                           <span key={idx} className={getLiveWordColorClass(word, idx)}>{word} </span>
@@ -3181,7 +2553,7 @@ function App() {
                       <div className="practice-sentence-box" style={{ fontSize: '18px', lineHeight: '1.6', backgroundColor: 'var(--bg-primary)', border: 'none' }}>
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                           {exerciseTargetText.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "").split(/\s+/).map((word, index) => {
-                            const mismatchedIndices = new Set(practiceResult.mismatched_words.map(w => w.index));
+                            const mismatchedIndices = new Set((analysisResult.mismatched_words || []).map((w: any) => w.index));
                             const isMismatched = mismatchedIndices.has(index);
                             return (
                               <span 
@@ -3247,7 +2619,6 @@ function App() {
                                 setExerciseDifficulty(lvl);
                                 const newPresets = getPresetsForExercise(activeExerciseDetail._id, lvl);
                                 setExerciseTargetText(newPresets[0]);
-                                setPracticeResult(null);
                                 setAnalysisResult(null);
                               }}
                               style={{
@@ -3273,15 +2644,15 @@ function App() {
                       {/* Unified drill tab switcher */}
                       <div style={{ display: 'flex', gap: '4px', backgroundColor: 'rgba(255,255,255,0.02)', padding: '4px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', marginBottom: '16px' }}>
                         <button 
-                          onClick={() => { setConfigTabExM1('presets'); setPracticeResult(null); setAnalysisResult(null); }}
+                          onClick={() => { setConfigTabExercise('presets'); setAnalysisResult(null); }}
                           style={{ 
                             flex: 1, 
                             padding: '8px', 
                             fontSize: '12px', 
                             fontWeight: '600',
-                            backgroundColor: configTabExM1 === 'presets' ? 'var(--bg-secondary)' : 'transparent', 
-                            border: configTabExM1 === 'presets' ? '1px solid var(--border-color)' : 'none', 
-                            color: configTabExM1 === 'presets' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                            backgroundColor: configTabExercise === 'presets' ? 'var(--bg-secondary)' : 'transparent', 
+                            border: configTabExercise === 'presets' ? '1px solid var(--border-color)' : 'none', 
+                            color: configTabExercise === 'presets' ? 'var(--text-primary)' : 'var(--text-secondary)',
                             borderRadius: '4px',
                             cursor: 'pointer',
                             transition: 'var(--transition-fast)'
@@ -3290,15 +2661,15 @@ function App() {
                           📋 Presets
                         </button>
                         <button 
-                          onClick={() => { setConfigTabExM1('custom'); setPracticeResult(null); setAnalysisResult(null); }}
+                          onClick={() => { setConfigTabExercise('custom'); setAnalysisResult(null); }}
                           style={{ 
                             flex: 1, 
                             padding: '8px', 
                             fontSize: '12px', 
                             fontWeight: '600',
-                            backgroundColor: configTabExM1 === 'custom' ? 'var(--bg-secondary)' : 'transparent', 
-                            border: configTabExM1 === 'custom' ? '1px solid var(--border-color)' : 'none', 
-                            color: configTabExM1 === 'custom' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                            backgroundColor: configTabExercise === 'custom' ? 'var(--bg-secondary)' : 'transparent', 
+                            border: configTabExercise === 'custom' ? '1px solid var(--border-color)' : 'none', 
+                            color: configTabExercise === 'custom' ? 'var(--text-primary)' : 'var(--text-secondary)',
                             borderRadius: '4px',
                             cursor: 'pointer',
                             transition: 'var(--transition-fast)'
@@ -3307,15 +2678,15 @@ function App() {
                           ✏ Custom
                         </button>
                         <button 
-                          onClick={() => { setConfigTabExM1('groq'); setPracticeResult(null); setAnalysisResult(null); }}
+                          onClick={() => { setConfigTabExercise('groq'); setAnalysisResult(null); }}
                           style={{ 
                             flex: 1, 
                             padding: '8px', 
                             fontSize: '12px', 
                             fontWeight: '600',
-                            backgroundColor: configTabExM1 === 'groq' ? 'rgba(168, 85, 247, 0.1)' : 'transparent', 
-                            border: configTabExM1 === 'groq' ? '1px solid var(--secondary)' : 'none', 
-                            color: configTabExM1 === 'groq' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                            backgroundColor: configTabExercise === 'groq' ? 'rgba(168, 85, 247, 0.1)' : 'transparent', 
+                            border: configTabExercise === 'groq' ? '1px solid var(--secondary)' : 'none', 
+                            color: configTabExercise === 'groq' ? 'var(--text-primary)' : 'var(--text-secondary)',
                             borderRadius: '4px',
                             cursor: 'pointer',
                             transition: 'var(--transition-fast)'
@@ -3326,7 +2697,7 @@ function App() {
                       </div>
 
                       {/* Sub-tab content */}
-                      {configTabExM1 === 'presets' && (
+                      {configTabExercise === 'presets' && (
                         <div className="form-group" style={{ marginBottom: '0' }}>
                           <label className="form-label">Select Drill Preset</label>
                           <select 
@@ -3340,7 +2711,7 @@ function App() {
                               fontSize: '14px'
                             }}
                             value={exerciseTargetText}
-                            onChange={(e) => { setExerciseTargetText(e.target.value); setPracticeResult(null); setAnalysisResult(null); }}
+                            onChange={(e) => { setExerciseTargetText(e.target.value); setAnalysisResult(null); }}
                           >
                             {getPresetsForExercise(activeExerciseDetail._id, exerciseDifficulty).map((presetText, pIdx) => (
                               <option key={pIdx} value={presetText}>
@@ -3351,21 +2722,21 @@ function App() {
                         </div>
                       )}
 
-                      {configTabExM1 === 'custom' && (
+                      {configTabExercise === 'custom' && (
                         <div className="form-group" style={{ marginBottom: '0' }}>
                           <label className="form-label">Write Custom Target Text</label>
                           <input 
                             type="text" 
-                            className="form-input"
+                            className="form-input" 
                             style={{ padding: '12px', fontSize: '14px', width: '100%' }}
                             value={exerciseTargetText}
-                            onChange={(e) => { setExerciseTargetText(e.target.value); setPracticeResult(null); setAnalysisResult(null); }}
+                            onChange={(e) => { setExerciseTargetText(e.target.value); setAnalysisResult(null); }}
                             placeholder="Type custom text to practice in this drill..."
                           />
                         </div>
                       )}
 
-                      {configTabExM1 === 'groq' && (
+                      {configTabExercise === 'groq' && (
                         <div className="glass-card" style={{ padding: '16px', border: '1px solid var(--border-color)', backgroundColor: 'rgba(255,255,255,0.01)' }}>
                           <h3 style={{ fontSize: '13px', fontWeight: 'bold', color: 'var(--text-primary)', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                             <Sparkles size={14} style={{ color: 'var(--accent)' }} /> Generate Custom Text with Groq AI
@@ -3490,22 +2861,26 @@ function App() {
                   </div>
                 </div>
 
-                {/* Below: Results evaluation reports matching Module 1 / Module 2 */}
+                {/* Below: Results evaluation reports for Exercises */}
                 
-                {/* Module 1 type Result: Pronunciation scoring card */}
-                {practiceResult && ["silent_pause_drill", "slow_rate_reading", "articulation_drill"].includes(activeExerciseDetail._id) && (
+                {/* Pronunciation scoring card (renders if target passage accuracy was evaluated) */}
+                {analysisResult && (analysisResult.word_error_rate !== undefined || (analysisResult.mismatched_words && analysisResult.mismatched_words.length > 0)) && (
                   <div className="glass-card result-section" style={{ marginTop: '30px', textAlign: 'left' }}>
                     <h3 className="feedback-title" style={{ textAlign: 'center' }}>Pronunciation Accuracy Analysis</h3>
                     
                     <div className="result-grid">
                       <div className="score-panel">
                         <div className="score-circle">
-                          <span className="score-val">{practiceResult.pronunciation_score}</span>
+                          <span className="score-val">
+                            {analysisResult.word_error_rate !== undefined 
+                              ? Math.max(0, Math.round((1 - analysisResult.word_error_rate) * 10 * 10) / 10) 
+                              : analysisResult.final_score}
+                          </span>
                           <span className="score-label">/ 10</span>
                         </div>
-                        <h4 className="score-heading">Overall Score</h4>
+                        <h4 className="score-heading">Accuracy Score</h4>
                         <p className="score-desc">
-                          Accuracy: {((1 - practiceResult.word_error_rate) * 100).toFixed(0)}% matching
+                          Accuracy: {(((1 - (analysisResult.word_error_rate ?? 0))) * 100).toFixed(0)}% matching
                         </p>
                       </div>
 
@@ -3514,9 +2889,9 @@ function App() {
                         <p style={{ fontSize: '14px', color: 'var(--text-secondary)', lineHeight: '1.6', marginBottom: '16px' }}>
                           Your spoken text was matched with the target words. Correct words are colored green, while mismatched/mispronounced words are colored red in the card above.
                         </p>
-                        {practiceResult.mismatched_words.length > 0 ? (
+                        {analysisResult.mismatched_words && analysisResult.mismatched_words.length > 0 ? (
                           <ul className="feedback-list">
-                            {practiceResult.mismatched_words.map((w, idx) => (
+                            {analysisResult.mismatched_words.map((w, idx) => (
                               <li className="feedback-item" key={idx}>
                                 <span className="feedback-bullet">▸</span>
                                 <span>
@@ -3535,8 +2910,8 @@ function App() {
                   </div>
                 )}
 
-                {/* Module 2 type Result: Fluency scoring card */}
-                {analysisResult && !["silent_pause_drill", "slow_rate_reading", "articulation_drill"].includes(activeExerciseDetail._id) && (
+                {/* Fluency & Clarity scoring card */}
+                {analysisResult && (
                   <div className="glass-card result-section" style={{ marginTop: '30px', textAlign: 'left' }}>
                     <h3 className="feedback-title" style={{ textAlign: 'center' }}>Fluency & Clarity Analysis</h3>
                     
@@ -3828,7 +3203,7 @@ function App() {
           </div>
         )}
 
-        {/* 5. MODULE 3: VIDEO & COMMUNICATION ANALYSIS */}
+        {/* 3. MODULE 2: VIDEO & COMMUNICATION ANALYSIS */}
         {activeTab === 'video' && (
           <div className="view-fade">
             <VideoAnalysisModule currentUser={currentUser} />

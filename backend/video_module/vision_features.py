@@ -23,7 +23,7 @@ from video_module.config import (
     ENABLE_EMOTION
 )
 
-logger = logging.getLogger("Module3_VisionFeatures")
+logger = logging.getLogger("Module2_VisionFeatures")
 
 MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 FACE_MODEL_PATH = os.path.join(MODELS_DIR, "face_landmarker.task")

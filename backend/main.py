@@ -42,7 +42,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Module 3 Integration
+# Module 2 Integration (Video & Communication Analysis)
 from video_module.router import router as video_router, init_router as init_video_router
 app.include_router(video_router)
 
@@ -72,7 +72,7 @@ def get_whisper_model():
         logger.info("Whisper model loaded successfully.")
     return whisper_model
 
-# Initialize Module 3 Router with database and whisper loader
+# Initialize Module 2 Router with database and whisper loader
 init_video_router(db, get_whisper_model)
 
 # ==========================================
@@ -1173,99 +1173,6 @@ def align_words(target_words: List[str], spoken_words: List[str]) -> List[Dict[s
             })
     return mismatched
 
-@app.post("/practice/submit")
-async def submit_practice(
-    audio: UploadFile = File(...),
-    target_sentence: str = Form(...),
-    exercise_id: Optional[str] = Form(None),
-    exercise_title: Optional[str] = Form(None),
-    authorization: Optional[str] = Header(None)
-):
-    """
-    Module 1: Practice Trainer Endpoint
-    """
-    user_id = get_user_id_from_header(authorization)
-    logger.info(f"Received practice submission for user '{user_id}' with target sentence: '{target_sentence}' and exercise_id: '{exercise_id}'")
-
-    session_id = str(uuid.uuid4())
-    temp_raw_path = os.path.join(TEMP_DIR, f"{session_id}_{audio.filename}")
-    temp_wav_path = os.path.join(TEMP_DIR, f"{session_id}_converted.wav")
-
-    try:
-        with open(temp_raw_path, "wb") as buffer:
-            shutil.copyfileobj(audio.file, buffer)
-
-        if not convert_to_wav(temp_raw_path, temp_wav_path):
-            raise HTTPException(status_code=500, detail="Audio conversion failed")
-
-        model = get_whisper_model()
-        result = model.transcribe(
-            temp_wav_path,
-            initial_prompt=WHISPER_FILLER_PROMPT,
-            condition_on_previous_text=False,
-            word_timestamps=True,
-            language="en"
-        )
-        spoken_text = result.get("text", "").strip()
-
-        target_clean = clean_text(target_sentence)
-        spoken_clean = clean_text(spoken_text)
-
-        wer_val = 1.0
-        if target_clean:
-            try:
-                wer_val = jiwer.wer(target_clean, spoken_clean)
-            except Exception as e:
-                logger.error(f"Error computing WER: {e}")
-                wer_val = 1.0
-
-        pron_score = max(0.0, min(10.0, round((1.0 - wer_val) * 10, 1)))
-
-        target_words = target_clean.split()
-        spoken_words = spoken_clean.split()
-        
-        mismatched_words = align_words(target_words, spoken_words)
-
-        streak_count = update_user_streak(user_id)
-
-        response_data = {
-            "session_id": session_id,
-            "spoken_text": spoken_text,
-            "target_text": target_sentence,
-            "word_error_rate": float(wer_val),
-            "pronunciation_score": float(pron_score),
-            "mismatched_words": mismatched_words,
-            "exercise_id": exercise_id,
-            "exercise_title": exercise_title,
-            "streak_count": streak_count
-        }
-
-        if db is not None:
-            try:
-                db["practice_sessions"].insert_one({
-                    **response_data,
-                    "user_id": user_id,
-                    "session_category": "exercise" if exercise_id else "practice",
-                    "created_at": datetime.utcnow()
-                })
-                logger.info(f"Practice session '{session_id}' persisted to DB.")
-            except Exception as e:
-                logger.error(f"Failed to save practice session to MongoDB: {e}")
-
-        return response_data
-
-    except Exception as e:
-        logger.error(f"Error processing practice submission: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-    finally:
-        for path in (temp_raw_path, temp_wav_path):
-            if os.path.exists(path):
-                try:
-                    os.remove(path)
-                except Exception as e:
-                    logger.warning(f"Failed to delete temp file '{path}': {e}")
-
 @app.post("/analyze/speech")
 async def analyze_speech(
     audio: UploadFile = File(...),
@@ -1275,7 +1182,7 @@ async def analyze_speech(
     authorization: Optional[str] = Header(None)
 ):
     """
-    Module 2: Speech Fluency Tracker Endpoint
+    Module 1: Speech Fluency Tracker Endpoint
     """
     user_id = get_user_id_from_header(authorization)
     logger.info(f"Received speech analysis request for user '{user_id}' with exercise_id: '{exercise_id}'")

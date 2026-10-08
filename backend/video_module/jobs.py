@@ -15,7 +15,7 @@ from video_module.windows import generate_fusion_timeline
 from video_module.scoring import compute_speech_scores, compute_visual_scores, compute_overall_scores
 from video_module.feedback import generate_multimodal_feedback
 
-logger = logging.getLogger("Module3_Worker")
+logger = logging.getLogger("Module2_Worker")
 
 # In-memory job state cache for real-time polling updates
 job_cache: Dict[str, Dict[str, Any]] = {}

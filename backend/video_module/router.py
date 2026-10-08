@@ -12,9 +12,9 @@ from video_module.config import TEMP_DIR, MAX_UPLOAD_BYTES
 from video_module.schemas import VideoJobResponse, VideoSessionDetail
 from video_module.jobs import process_video_job, get_job_state, set_job_state
 
-logger = logging.getLogger("Module3_Router")
+logger = logging.getLogger("Module2_Router")
 
-router = APIRouter(prefix="/video", tags=["Module 3: Video Analysis"])
+router = APIRouter(prefix="/video", tags=["Module 2: Video Analysis"])
 
 # Reference to the main database and Whisper model (injected during setup)
 _db = None
@@ -24,7 +24,7 @@ def init_router(db_instance, whisper_model_getter):
     global _db, _whisper_model_fn
     _db = db_instance
     _whisper_model_fn = whisper_model_getter
-    logger.info("Module 3 router initialized with shared DB and Whisper loader.")
+    logger.info("Module 2 router initialized with shared DB and Whisper loader.")
 
 def get_user_id(authorization: Optional[str]) -> str:
     if not authorization:
@@ -43,7 +43,7 @@ def get_user_id(authorization: Optional[str]) -> str:
 def video_health():
     return {
         "status": "healthy",
-        "service": "SpeechAI Module 3 (Video + Audio Communication Analysis)",
+        "service": "SpeechAI Module 2 (Video + Audio Communication Analysis)",
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "database_available": _db is not None
     }

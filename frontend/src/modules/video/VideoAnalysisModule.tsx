@@ -125,11 +125,11 @@ export const VideoAnalysisModule: React.FC<VideoAnalysisModuleProps> = ({ curren
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
             <span style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 800, color: 'var(--secondary)', background: 'var(--secondary-light)', padding: '3px 10px', borderRadius: 'var(--radius-full)' }}>
-              Module 3
+              Module 2
             </span>
             <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Multimodal AI Pipeline</span>
           </div>
-          <h1 className="vid-hero-title">Video & Communication Analysis</h1>
+          <h1 className="vid-hero-title">Module 2: Video & Communication Analysis</h1>
           <p className="vid-hero-subtitle">
             Synchronized speech and body language diagnostic trainer. Evaluates vocal pace, gaze engagement, head stability, and postural composure.
           </p>

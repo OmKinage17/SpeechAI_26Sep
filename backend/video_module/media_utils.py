@@ -5,7 +5,7 @@ import json
 from typing import Dict, Any
 import static_ffmpeg
 
-logger = logging.getLogger("Module3_MediaUtils")
+logger = logging.getLogger("Module2_MediaUtils")
 
 try:
     static_ffmpeg.add_paths()
