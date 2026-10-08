@@ -1,9 +1,18 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Mic, Square, Play, CheckCircle, AlertCircle, Sparkles, BookOpen, BarChart3, HelpCircle, Activity, Flame, History, AlertTriangle, LogIn, LogOut, UserPlus, X, Search, RefreshCw, LayoutDashboard, Compass, Volume2, Video as VideoIcon, TrendingUp, TrendingDown, Award, Target, ShieldCheck, Layers, Gauge } from 'lucide-react';
+import { Mic, Square, Play, CheckCircle, AlertCircle, Sparkles, BookOpen, BarChart3, HelpCircle, Activity, Flame, History, AlertTriangle, LogIn, LogOut, UserPlus, X, Search, RefreshCw, LayoutDashboard, Compass, Volume2, Video as VideoIcon, TrendingUp, TrendingDown, Award, Target, ShieldCheck, Layers, Gauge, Trash2, Calendar, ChevronDown, ChevronUp } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { LineChart, Line, AreaChart, Area, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceArea, ReferenceLine } from 'recharts';
 import './App.css';
+import './modules/video/video.css';
 import { VideoAnalysisModule } from './modules/video/VideoAnalysisModule';
+import { ScoreOverview } from './modules/video/components/ScoreOverview';
+import { SpeechDetailedMetrics } from './modules/video/components/SpeechDetailedMetrics';
+import { FusionTimeline } from './modules/video/components/FusionTimeline';
+import { EmotionBreakdown } from './modules/video/components/EmotionBreakdown';
+import { FeedbackList } from './modules/video/components/FeedbackList';
+import { PronunciationHighlight } from './modules/video/components/PronunciationHighlight';
+import { deleteVideoSession } from './modules/video/videoApi';
+import type { ScoresBreakdown, SpeechFeatures } from './modules/video/types';
 
 // Type definitions
 interface AnalyticsData {
@@ -1333,6 +1342,23 @@ function App() {
 
   const visibleHistory = filteredHistory;
 
+  const handleDeleteHistorySession = async (sId: string, sType?: string) => {
+    if (sType === 'video') {
+      try {
+        await deleteVideoSession(sId);
+      } catch (e) {
+        console.error('Failed to delete video session:', e);
+      }
+    }
+    setSessionHistory(prev => prev.filter(s => {
+      const id = s.session_id || (s as any)._id || (s as any).job_id || (s as any).id;
+      return id !== sId;
+    }));
+    if (expandedSessionId === sId) {
+      setExpandedSessionId(null);
+    }
+  };
+
   // Reset all ephemeral analysis, recording, and transcript activity data
   const resetActivityState = (targetTab?: 'dashboard' | 'fluency' | 'exercises' | 'video', keepExerciseDetail = false) => {
     // 1. Immediately stop any TTS or recorded audio playback
@@ -1824,80 +1850,273 @@ function App() {
                   {visibleHistory.map((session, idx) => {
                     const date = new Date(session.created_at);
                     const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                    const isExpanded = expandedSessionId === session.session_id;
+                    const sessionId = session.session_id || (session as any)._id || (session as any).job_id || (session as any).id || String(idx);
+                    const isExpanded = expandedSessionId === sessionId;
+                    const isVideoSession = session.type === 'video' || session.session_category === 'video';
                     const isExercisePractice = session.session_category === 'practice' || (session.type === 'exercise' && session.pronunciation_score !== undefined);
                     const isExerciseAnalysis = session.session_category === 'analysis' || (session.type === 'exercise' && session.final_score !== undefined);
                     const badgeColor = isExercisePractice || session.type === 'practice'
                       ? 'var(--primary-light)'
-                      : session.type === 'video' || session.session_category === 'video'
+                      : isVideoSession
                       ? 'rgba(6, 182, 212, 0.15)'
                       : 'var(--secondary-light)';
                     const badgeTextColor = isExercisePractice || session.type === 'practice'
                       ? 'var(--primary)'
-                      : session.type === 'video' || session.session_category === 'video'
+                      : isVideoSession
                       ? '#06b6d4'
                       : 'var(--secondary)';
                     const summaryScoreText = isExercisePractice
                       ? `Practice score: ${session.pronunciation_score ?? 0}/10`
                       : isExerciseAnalysis
                         ? `Fluency score: ${session.final_score ?? 0}/10`
-                        : session.type === 'video' || session.session_category === 'video'
-                          ? `Overall score: ${session.final_score ?? session.pronunciation_score ?? 0}/10`
+                        : isVideoSession
+                          ? `Overall score: ${((session as any).scores?.overall_10 ?? session.final_score ?? session.pronunciation_score ?? 0).toFixed(1)}/10`
                           : session.type === 'analysis'
                             ? `Fluency score: ${session.final_score ?? 0}/10`
                             : `Exercise score: ${session.pronunciation_score ?? session.final_score ?? 0}/10`;
 
+                    // Video Session specific detailed payload normalizations
+                    const rawScores = (session as any).scores || {};
+                    const normalizedScores: ScoresBreakdown = {
+                      F: rawScores.F ?? null,
+                      P: rawScores.P ?? null,
+                      N: rawScores.N ?? null,
+                      E: rawScores.E ?? null,
+                      G: rawScores.G ?? null,
+                      V: rawScores.V ?? null,
+                      overall_100: rawScores.overall_100 ?? (rawScores.overall_10 !== undefined ? rawScores.overall_10 * 10 : (session.final_score !== undefined ? session.final_score * 10 : 0)),
+                      overall_10: rawScores.overall_10 ?? session.final_score ?? 0,
+                      weights_used: rawScores.weights_used ?? {},
+                      unavailable: rawScores.unavailable ?? []
+                    };
+
+                    const rawSpeech = (session as any).speech || {};
+                    const normalizedSpeech: SpeechFeatures = {
+                      transcript: rawSpeech.transcript || session.transcript || (session as any).spoken_text || '',
+                      word_count: rawSpeech.word_count || ((rawSpeech.transcript || session.transcript || '').split(/\s+/).filter(Boolean).length || 1),
+                      wpm: rawSpeech.wpm ?? session.wpm ?? 0,
+                      filler_count: rawSpeech.filler_count ?? session.filler_count ?? 0,
+                      filler_types: rawSpeech.filler_types || [],
+                      repetition_count: rawSpeech.repetition_count ?? session.stammer_events ?? 0,
+                      long_pauses: rawSpeech.long_pauses ?? session.long_pauses ?? 0,
+                      pause_ratio: rawSpeech.pause_ratio ?? 0,
+                      clarity_raw: rawSpeech.clarity_raw ?? 0,
+                      pause_events: rawSpeech.pause_events || session.pause_details || [],
+                      filler_details: rawSpeech.filler_details || [],
+                      stammer_details: rawSpeech.stammer_details || []
+                    };
+
+                    const durationSec = Math.max(1, (session as any).duration_sec || 1);
+                    const normalizedTimeline = (session as any).timeline || [];
+                    const cameraFacingPct = Math.round(((session as any).visual?.camera_facing_ratio ?? 0) * 100);
+
                     return (
                       <div key={idx} style={{ display: 'flex', flexDirection: 'column', padding: '16px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', flexWrap: 'wrap', gap: '10px' }}>
-                          <div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <span style={{ 
-                                fontSize: '10px', 
-                                padding: '2px 8px', 
-                                borderRadius: '4px', 
-                                fontWeight: 'bold',
-                                textTransform: 'uppercase',
-                                backgroundColor: badgeColor,
-                                color: badgeTextColor
-                              }}>
-                                {session.type === 'video' ? 'Module 2: Video' : session.type}
-                              </span>
-                              <span style={{ fontSize: '14px', fontWeight: 'bold', color: 'var(--text-primary)' }}>
-                                {summaryScoreText}
-                              </span>
-                            </div>
-                            <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px' }}>
-                              {session.type === 'practice' ? `Target: "${session.target_text}"`
-                                : session.type === 'analysis' ? `Spoken: "${session.transcript || 'Speech'}"`
-                                : session.type === 'video' ? `Video practice: "${session.spoken_text || session.transcript || 'Video analysis session'}"`
-                                : `Exercise: ${session.exercise_title || session.exercise_id || 'Practice Drill'}`}
-                            </p>
-                          </div>
-                          
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{dateStr}</span>
-                            <button 
-                              onClick={() => setExpandedSessionId(isExpanded ? null : session.session_id)}
-                              style={{ 
-                                fontSize: '12px', 
-                                padding: '6px 12px', 
-                                backgroundColor: isExpanded ? 'var(--bg-primary)' : 'var(--primary-light)', 
-                                border: '1px solid var(--primary)', 
-                                borderRadius: 'var(--radius-sm)', 
+                        {isVideoSession ? (
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', flexWrap: 'wrap', gap: '12px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                              <div style={{
+                                width: '46px',
+                                height: '46px',
+                                borderRadius: '50%',
+                                background: 'var(--primary-light)',
+                                border: '2px solid var(--primary)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontWeight: 800,
+                                fontSize: '15px',
                                 color: 'var(--text-primary)',
-                                cursor: 'pointer'
-                              }}
-                            >
-                              {isExpanded ? 'Hide Details' : 'View Report'}
-                            </button>
+                                flexShrink: 0
+                              }}>
+                                {normalizedScores.overall_10.toFixed(1)}
+                              </div>
+
+                              <div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                                  <span style={{ 
+                                    fontSize: '10px', 
+                                    padding: '2px 8px', 
+                                    borderRadius: '4px', 
+                                    fontWeight: 'bold',
+                                    textTransform: 'uppercase',
+                                    backgroundColor: 'rgba(6, 182, 212, 0.15)',
+                                    color: '#06b6d4'
+                                  }}>
+                                    Module 2: Video
+                                  </span>
+                                  <span style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)', textTransform: 'capitalize' }}>
+                                    {((session as any).task_type || 'free_talk').replace('_', ' ')}
+                                  </span>
+                                  <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: 'var(--radius-full)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
+                                    {Math.round((session as any).duration_sec || 0)}s
+                                  </span>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                                  <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                    <Calendar size={12} /> {dateStr}
+                                  </span>
+                                  <span>•</span>
+                                  <span>{normalizedSpeech.wpm} WPM</span>
+                                  <span>•</span>
+                                  <span>{cameraFacingPct}% Gaze</span>
+                                </div>
+                                {normalizedSpeech.transcript && (
+                                  <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px', fontStyle: 'italic', maxWidth: '650px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    "{normalizedSpeech.transcript}"
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                              <button 
+                                onClick={() => setExpandedSessionId(isExpanded ? null : sessionId)}
+                                style={{ 
+                                  fontSize: '12px', 
+                                  padding: '6px 14px', 
+                                  backgroundColor: isExpanded ? 'var(--bg-primary)' : 'var(--primary-light)', 
+                                  border: '1px solid var(--primary)', 
+                                  borderRadius: 'var(--radius-sm)', 
+                                  color: 'var(--text-primary)',
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '6px'
+                                }}
+                              >
+                                {isExpanded ? (
+                                  <>
+                                    <span>Hide Details</span>
+                                    <ChevronUp size={14} />
+                                  </>
+                                ) : (
+                                  <>
+                                    <span>View Report</span>
+                                    <ChevronDown size={14} />
+                                  </>
+                                )}
+                              </button>
+                              <button
+                                onClick={() => handleDeleteHistorySession(sessionId, session.type)}
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  color: 'var(--text-muted)',
+                                  padding: '6px',
+                                  cursor: 'pointer',
+                                  borderRadius: '4px',
+                                  display: 'flex',
+                                  alignItems: 'center'
+                                }}
+                                title="Delete session"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
                           </div>
-                        </div>
+                        ) : (
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', flexWrap: 'wrap', gap: '10px' }}>
+                            <div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span style={{ 
+                                  fontSize: '10px', 
+                                  padding: '2px 8px', 
+                                  borderRadius: '4px', 
+                                  fontWeight: 'bold',
+                                  textTransform: 'uppercase',
+                                  backgroundColor: badgeColor,
+                                  color: badgeTextColor
+                                }}>
+                                  {session.type}
+                                </span>
+                                <span style={{ fontSize: '14px', fontWeight: 'bold', color: 'var(--text-primary)' }}>
+                                  {summaryScoreText}
+                                </span>
+                              </div>
+                              <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px' }}>
+                                {session.type === 'practice' ? `Target: "${session.target_text}"`
+                                  : session.type === 'analysis' ? `Spoken: "${session.transcript || 'Speech'}"`
+                                  : `Exercise: ${session.exercise_title || session.exercise_id || 'Practice Drill'}`}
+                              </p>
+                            </div>
+                            
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{dateStr}</span>
+                              <button 
+                                onClick={() => setExpandedSessionId(isExpanded ? null : sessionId)}
+                                style={{ 
+                                  fontSize: '12px', 
+                                  padding: '6px 12px', 
+                                  backgroundColor: isExpanded ? 'var(--bg-primary)' : 'var(--primary-light)', 
+                                  border: '1px solid var(--primary)', 
+                                  borderRadius: 'var(--radius-sm)', 
+                                  color: 'var(--text-primary)',
+                                  cursor: 'pointer'
+                                }}
+                              >
+                                {isExpanded ? 'Hide Details' : 'View Report'}
+                              </button>
+                            </div>
+                          </div>
+                        )}
 
                         {/* Expandable detailed scorecard panel */}
                         {isExpanded && (
                           <div className="view-fade">
-                            {isExercisePractice ? (
+                            {isVideoSession ? (
+                              <div style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '12px', borderBottom: '1px solid var(--border-color)', flexWrap: 'wrap', gap: '8px' }}>
+                                  <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
+                                    <VideoIcon size={20} style={{ color: '#06b6d4' }} />
+                                    Multimodal Session Analysis Report
+                                  </h3>
+                                  <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                                    Recorded {dateStr}
+                                  </span>
+                                </div>
+
+                                {/* 1. Score Overview & Radar */}
+                                <ScoreOverview
+                                  scores={normalizedScores}
+                                  durationSec={durationSec}
+                                />
+
+                                {/* 1.5 Detailed Speech Analytics */}
+                                {normalizedSpeech && (
+                                  <>
+                                    <SpeechDetailedMetrics
+                                      speech={normalizedSpeech}
+                                      durationSec={durationSec}
+                                      taskType={(session as any).task_type || 'free_talk'}
+                                    />
+                                    {(((session as any).task_type === 'custom_topic') || (session as any).prompt_text || session.target_text) && (
+                                      <PronunciationHighlight
+                                        targetText={(session as any).prompt_text || session.target_text || ''}
+                                        spokenText={normalizedSpeech.transcript}
+                                      />
+                                    )}
+                                  </>
+                                )}
+
+                                {/* 2. 5-Second Window Fusion Timeline */}
+                                {normalizedTimeline.length > 0 && (
+                                  <FusionTimeline timeline={normalizedTimeline} />
+                                )}
+
+                                {/* 3. Emotion Breakdown & Feedback List */}
+                                <div className="vid-results-grid">
+                                  <EmotionBreakdown
+                                    distribution={(session as any).visual?.emotion_distribution || {}}
+                                    dominantEmotion={(session as any).visual?.dominant_emotion || 'neutral'}
+                                  />
+                                  <FeedbackList
+                                    feedback={(session as any).feedback || []}
+                                    qualityWarnings={(session as any).quality_warnings || (session as any).visual?.quality_warnings || []}
+                                  />
+                                </div>
+                              </div>
+                            ) : isExercisePractice ? (
                               <div style={{ marginTop: '16px', padding: '16px', backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
                                 <h4 style={{ fontSize: '14px', fontWeight: 'bold', color: 'var(--text-primary)', marginBottom: '12px' }}>{session.type === 'exercise' ? 'Exercise Pronunciation Metrics' : 'Pronunciation Accuracy Metrics'}</h4>
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginBottom: '12px' }}>

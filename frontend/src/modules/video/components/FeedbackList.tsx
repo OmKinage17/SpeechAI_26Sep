@@ -8,8 +8,20 @@ interface FeedbackListProps {
 }
 
 export const FeedbackList: React.FC<FeedbackListProps> = ({ feedback, qualityWarnings }) => {
-  const speechItems = feedback.filter(f => f.category === 'speech');
-  const nonVerbalItems = feedback.filter(f => f.category === 'non_verbal');
+  const safeFeedback = (feedback || []).map(f => {
+    if (typeof f === 'string') {
+      return { category: 'speech', severity: 'tip', message: f };
+    }
+    return {
+      category: f?.category || 'speech',
+      severity: f?.severity || 'tip',
+      message: f?.message || JSON.stringify(f)
+    };
+  });
+
+  const speechItems = safeFeedback.filter(f => f.category === 'speech');
+  const nonVerbalItems = safeFeedback.filter(f => f.category === 'non_verbal');
+  const otherItems = safeFeedback.filter(f => f.category !== 'speech' && f.category !== 'non_verbal');
 
   const renderIcon = (severity: string) => {
     switch (severity) {
@@ -49,6 +61,23 @@ export const FeedbackList: React.FC<FeedbackListProps> = ({ feedback, qualityWar
           </h4>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {nonVerbalItems.map((item, idx) => (
+              <div key={idx} style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', fontSize: '13.5px', color: 'var(--text-secondary)' }}>
+                {renderIcon(item.severity)}
+                <span>{item.message}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Additional Diagnostic Items */}
+      {otherItems.length > 0 && (
+        <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <h4 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span>General Diagnostic Feedback</span>
+          </h4>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {otherItems.map((item, idx) => (
               <div key={idx} style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', fontSize: '13.5px', color: 'var(--text-secondary)' }}>
                 {renderIcon(item.severity)}
                 <span>{item.message}</span>

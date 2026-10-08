@@ -1344,15 +1344,29 @@ def get_user_reports(user_id: str, authorization: Optional[str] = Header(None)):
         video_cursor = db["video_sessions"].find({"user_id": target_user_id, "status": "COMPLETED"}).sort("created_at", -1)
         video_sessions = list(video_cursor)
         for s in video_sessions:
-            s["_id"] = str(s.get("_id", s.get("job_id", "")))
+            job_id_str = str(s.get("_id", s.get("job_id", "")))
+            s["_id"] = job_id_str
+            s["id"] = job_id_str
+            s["session_id"] = str(s.get("session_id", job_id_str))
             s["type"] = "video"
-            if "scores" in s and "overall" in s["scores"]:
-                s["final_score"] = s["scores"]["overall"]
-            if "speech" in s:
-                s["transcript"] = s["speech"].get("transcript", "")
-                s["wpm"] = s["speech"].get("wpm", 0)
-                s["filler_count"] = s["speech"].get("filler_count", 0)
+            scores = s.get("scores", {})
+            if isinstance(scores, dict):
+                if scores.get("overall_10") is not None:
+                    s["final_score"] = scores.get("overall_10")
+                elif scores.get("overall") is not None:
+                    s["final_score"] = scores.get("overall")
+            speech = s.get("speech", {})
+            if isinstance(speech, dict):
+                s["transcript"] = speech.get("transcript", s.get("transcript", ""))
+                s["wpm"] = speech.get("wpm", s.get("wpm", 0))
+                s["filler_count"] = speech.get("filler_count", s.get("filler_count", 0))
+                s["long_pauses"] = speech.get("long_pauses", s.get("long_pauses", 0))
+                s["stammer_events"] = speech.get("repetition_count", s.get("stammer_events", 0))
+                if "pause_events" in speech and not s.get("pause_details"):
+                    s["pause_details"] = speech.get("pause_events")
             s["created_at"] = serialize_datetime(s["created_at"]) if isinstance(s["created_at"], datetime) else str(s.get("created_at", ""))
+            if isinstance(s.get("completed_at"), datetime):
+                s["completed_at"] = serialize_datetime(s["completed_at"])
 
         combined = practice_sessions + analysis_sessions + video_sessions
         combined.sort(key=lambda x: x.get("created_at", ""), reverse=True)
